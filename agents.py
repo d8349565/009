@@ -4,7 +4,9 @@ Agent基类和各种专业Agent实现
 from openai import OpenAI
 import config
 import json
+import time
 from typing import List, Dict, Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 class BaseAgent:
@@ -47,6 +49,9 @@ class BaseAgent:
             if self.use_reasoner:
                 print(f"  [{self.role}] 使用思考模式进行深度分析...")
             
+            # 记录API调用开始时间
+            api_start_time = time.time()
+            
             # 如果有系统时间，先把时间信息注入到system prompt中
             system_content = self.system_prompt
             if getattr(self, 'system_datetime', None):
@@ -60,6 +65,10 @@ class BaseAgent:
                 ],
                 temperature=temperature
             )
+            
+            # 记录API调用耗时
+            api_duration = time.time() - api_start_time
+            print(f"  [{self.role}] API调用耗时: {api_duration:.2f}秒")
             
             # 如果是推理模型，可能会有reasoning_content
             content = response.choices[0].message.content
@@ -188,7 +197,9 @@ class RequirementAnalyzer(BaseAgent):
         print(f"[步骤1] 需求分析师正在分析需求...")
         print(f"{'='*60}")
         
+        start_time = time.time()
         response = self.call_llm(f"用户需求：{requirement}", temperature=0.3)
+        duration = time.time() - start_time
         
         try:
             # 尝试提取JSON
@@ -201,11 +212,7 @@ class RequirementAnalyzer(BaseAgent):
             
             result = json.loads(json_str)
             
-            print(f"\n需求理解: {result.get('understanding', '')}")
-            print(f"关键概念: {', '.join(result.get('key_concepts', []))}")
-            print(f"时间范围: {result.get('time_range', '')}")
-            print(f"搜索关键词: {', '.join(result.get('search_keywords', []))}")
-            print(f"搜索策略: {result.get('search_strategy', '')}")
+            print(f"✓ 需求分析完成 (耗时: {duration:.2f}秒)")
             
             return result
         except json.JSONDecodeError:
@@ -328,32 +335,153 @@ JSON 中：
 }"""
         super().__init__("信息收集员", system_prompt, use_reasoner=False, system_datetime=system_datetime)
     
-    def evaluate_and_clean(self, search_results: List[Dict[str, str]], requirement: str) -> Dict[str, Any]:
-        """评估和清理信息"""
+    def evaluate_and_clean(self, search_results: List[Dict[str, str]], requirement: str, batch_size: int = 5) -> Dict[str, Any]:
+        """
+        评估和清理信息（批量处理优化版，支持并发）
+        
+        Args:
+            search_results: 搜索结果列表
+            requirement: 用户需求
+            batch_size: 批量处理大小，默认5条一批
+        """
         print(f"\n{'='*60}")
         print(f"[步骤4] 信息收集员正在评估和清理数据...")
+        print(f"  待评估: {len(search_results)} 条，批量大小: {batch_size}")
+        
+        # 根据配置决定是否使用并发
+        max_workers = config.MAX_CONCURRENT_EVALUATIONS
+        use_concurrent = max_workers > 1
+        
+        if use_concurrent:
+            print(f"  并发模式: 同时评估 {max_workers} 批 ⚡")
+        else:
+            print(f"  串行模式")
         print(f"{'='*60}")
         
-        # 构建评估请求（包含URL和更完整的内容）
+        # 分批
+        batches = [search_results[i:i+batch_size] 
+                   for i in range(0, len(search_results), batch_size)]
+        total_batches = len(batches)
+        
+        start_time = time.time()
+        all_valid_sources = []
+        
+        if use_concurrent:
+            # 并发评估
+            all_valid_sources = self._evaluate_batches_concurrent(batches, requirement, max_workers)
+        else:
+            # 串行评估（原有逻辑）
+            all_valid_sources = self._evaluate_batches_serial(batches, requirement)
+        
+        duration = time.time() - start_time
+        
+        result = {
+            "valid_sources": all_valid_sources,
+            "overall_assessment": f"{'并发' if use_concurrent else '串行'}评估完成，共处理 {len(search_results)} 条结果，有效来源 {len(all_valid_sources)} 个，耗时 {duration:.2f}秒",
+            "data_quality": "良好" if len(all_valid_sources) > 0 else "较差"
+        }
+        
+        # 显示结果摘要
+        print(f"\n📊 评估汇总: 共找到 {len(all_valid_sources)} 个有效来源（耗时: {duration:.2f}秒）")
+        if all_valid_sources:
+            for i, source in enumerate(all_valid_sources[:3], 1):
+                print(f"  {i}. {source.get('title', '')[:50]}... [可信度: {source.get('credibility_score', 0)}/10]")
+        
+        return result
+    
+    def _evaluate_batches_concurrent(self, batches: List[List[Dict]], requirement: str, max_workers: int) -> List[Dict]:
+        """
+        并发评估多个批次
+        
+        Args:
+            batches: 批次列表
+            requirement: 用户需求
+            max_workers: 最大并发数
+        """
+        all_valid_sources = []
+        total_batches = len(batches)
+        
+        # 使用线程池并发评估
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # 提交所有批次任务
+            future_to_batch = {
+                executor.submit(self._evaluate_single_batch, batch, requirement, idx+1, total_batches): idx
+                for idx, batch in enumerate(batches)
+            }
+            
+            # 收集结果（按完成顺序）
+            completed_count = 0
+            for future in as_completed(future_to_batch):
+                batch_idx = future_to_batch[future]
+                completed_count += 1
+                
+                try:
+                    batch_results = future.result()
+                    all_valid_sources.extend(batch_results)
+                    print(f"  ✓ 批次 {batch_idx+1} 完成 ({completed_count}/{total_batches})，找到 {len(batch_results)} 个有效来源")
+                except Exception as e:
+                    print(f"  ✗ 批次 {batch_idx+1} 失败: {e}")
+        
+        return all_valid_sources
+    
+    def _evaluate_batches_serial(self, batches: List[List[Dict]], requirement: str) -> List[Dict]:
+        """
+        串行评估多个批次（原有逻辑）
+        
+        Args:
+            batches: 批次列表
+            requirement: 用户需求
+        """
+        all_valid_sources = []
+        total_batches = len(batches)
+        
+        for idx, batch in enumerate(batches):
+            print(f"\n⏳ 评估第 {idx+1}/{total_batches} 批 ({len(batch)} 条)...")
+            batch_start = time.time()
+            
+            batch_results = self._evaluate_single_batch(batch, requirement, idx+1, total_batches)
+            all_valid_sources.extend(batch_results)
+            
+            batch_duration = time.time() - batch_start
+            print(f"✓ 第 {idx+1} 批完成，找到 {len(batch_results)} 个有效来源 (耗时: {batch_duration:.2f}秒)")
+        
+        return all_valid_sources
+    
+    def _evaluate_single_batch(self, batch: List[Dict], requirement: str, batch_num: int, total_batches: int) -> List[Dict]:
+        """
+        评估单个批次（用于并发或串行调用）
+        
+        Args:
+            batch: 单个批次的搜索结果
+            requirement: 用户需求
+            batch_num: 批次编号
+            total_batches: 总批次数
+        """
+        # 构建评估请求
         results_text = "\n\n".join([
-            f"来源 {i+1}:\n标题: {r.get('title', '无标题')}\nURL: {r.get('url', '无链接')}\n内容: {r.get('content', '无内容')[:5000]}"
-            for i, r in enumerate(search_results)
+            f"来源 {i+1}:\n标题: {r.get('title', '无标题')}\nURL: {r.get('url', '无链接')}\n内容: {r.get('content', '无内容')[:config.CONTENT_EXTRACT_LENGTH]}"
+            for i, r in enumerate(batch)
         ])
         
         user_message = f"""用户需求: {requirement}
 
-搜索结果:
+搜索结果（第{batch_num}批，共{total_batches}批）:
 {results_text}
 
-请仔细评估这些信息的有效性和可信度，**完整提取所有关键数据和数值**（包括销售额、市场规模、增长率等）。"""
+请仔细评估这些信息的有效性和可信度，提取关键数据。注意：只返回JSON格式，无需其他说明。"""
         
-        response = self.call_llm(user_message, temperature=0.3)
+        response = self.call_llm(user_message, temperature=0.2)
+        return self._parse_evaluation_response(response, batch)
+    
+    def _parse_evaluation_response(self, response: str, original_batch: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+        """
+        解析评估响应（带降级方案）
         
-        # 尝试多种方式提取和解析JSON
-        json_str = None
-        result = None
-        
-        # 方法1: 提取代码块中的JSON
+        Args:
+            response: API响应
+            original_batch: 原始批次数据（用于降级方案）
+        """
+        # 尝试提取JSON
         try:
             if "```json" in response:
                 json_str = response.split("```json")[1].split("```")[0].strip()
@@ -363,63 +491,26 @@ JSON 中：
                 json_str = response.strip()
             
             result = json.loads(json_str)
-            print(f"\n✓ 成功解析JSON（方法1），找到 {len(result.get('valid_sources', []))} 个有效来源")
+            return result.get('valid_sources', [])
         
-        except json.JSONDecodeError as e:
-            print(f"\n[警告] JSON解析失败（方法1）: {str(e)}")
-            
-            # 方法2: 尝试手动提取valid_sources数组（降级方案）
-            try:
-                print("[尝试] 使用降级方案手动提取数据...")
-                
-                # 直接从搜索结果构建valid_sources
-                valid_sources = []
-                for idx, result_item in enumerate(search_results[:5], 1):  # 只取前5个
-                    valid_sources.append({
-                        "title": result_item.get('title', '无标题'),
-                        "url": result_item.get('url', ''),
-                        "content_summary": result_item.get('content', '')[:200],
-                        "credibility_score": 6,  # 默认可信度
-                        "key_points": [],
-                        "data_found": "待分析"
-                    })
-                
-                result = {
-                    "valid_sources": valid_sources,
-                    "overall_assessment": "使用降级方案，已保留所有搜索结果",
-                    "data_quality": "降级处理"
-                }
-                
-                print(f"✓ 降级方案成功，保留了 {len(valid_sources)} 个来源")
-            
-            except Exception as e2:
-                print(f"[错误] 降级方案也失败: {str(e2)}")
-                result = {
-                    "valid_sources": [],
-                    "overall_assessment": f"JSON解析失败且降级方案失败: {str(e2)}",
-                    "data_quality": "失败"
-                }
+        except json.JSONDecodeError:
+            # 降级方案：使用简化的数据结构
+            print(f"  [警告] JSON解析失败，使用降级方案")
+            valid_sources = []
+            for item in original_batch[:3]:  # 降级时只保留前3个
+                valid_sources.append({
+                    "title": item.get('title', '无标题'),
+                    "url": item.get('url', ''),
+                    "content_summary": item.get('content', '')[:200],
+                    "credibility_score": 5,  # 默认中等可信度
+                    "key_points": [],
+                    "data_found": "待人工分析"
+                })
+            return valid_sources
         
         except Exception as e:
-            print(f"\n[错误] 评估数据时发生异常: {str(e)}")
-            result = {
-                "valid_sources": [],
-                "overall_assessment": f"处理异常: {str(e)}",
-                "data_quality": "异常"
-            }
-        
-        # 显示结果摘要
-        if result and result.get('valid_sources'):
-            for i, source in enumerate(result.get('valid_sources', [])[:3], 1):
-                print(f"\n来源 {i}:")
-                print(f"  标题: {source.get('title', '')[:60]}...")
-                print(f"  URL: {source.get('url', '无链接')}")
-                print(f"  可信度: {source.get('credibility_score', 0)}/10")
-            
-            if result.get('overall_assessment'):
-                print(f"\n整体评估: {result.get('overall_assessment', '')[:100]}...")
-        
-        return result
+            print(f"  [错误] 解析异常: {str(e)}")
+            return []
 
 
 class ReportWriter(BaseAgent):
@@ -457,25 +548,61 @@ class ReportWriter(BaseAgent):
 - 如果数据不足，坦诚说明"""
         super().__init__("报告撰写员", system_prompt, use_reasoner=True, system_datetime=system_datetime)
 
-    def generate_report(self, requirement: str, analysis: Dict, cleaned_data: Dict) -> str:
-        """生成Markdown格式报告"""
+    def generate_report(self, requirement: str, analysis: Dict, cleaned_data: List) -> str:
+        """生成Markdown格式报告（优化版 - 精简输入数据）"""
         print(f"\n{'='*60}")
         print(f"[步骤5] 报告撰写员正在生成Markdown报告...")
         print(f"{'='*60}")
         
+        # 根据配置决定是否精简输入数据
+        if config.SIMPLIFY_REPORT_INPUT:
+            # 精简模式：只发送关键信息，大幅减少prompt长度
+            simplified_data = []
+            for item in cleaned_data[:20]:  # 最多使用20条
+                simplified_data.append({
+                    "title": item.get('title', '')[:100],  # 限制标题长度
+                    "url": item.get('url', ''),
+                    "key_data": item.get('data_found', '未指定')[:300],  # 只要关键数据，限制长度
+                    "score": item.get('credibility_score', 'N/A')
+                })
+            
+            data_str = json.dumps(simplified_data, ensure_ascii=False, indent=2)
+            print(f"  ℹ️  使用精简模式（{len(simplified_data)}条数据，约{len(data_str)}字符）")
+        else:
+            # 完整模式：发送所有数据
+            data_str = json.dumps(cleaned_data, ensure_ascii=False, indent=2)
+            print(f"  ℹ️  使用完整模式（{len(cleaned_data)}条数据，约{len(data_str)}字符）")
+        
+        # 简化需求分析结果
+        simplified_analysis = {
+            "understanding": analysis.get('understanding', '')[:200],
+            "key_concepts": analysis.get('key_concepts', [])[:5],
+            "time_range": analysis.get('time_range', ''),
+            "search_keywords": analysis.get('search_keywords', [])[:5]
+        }
+        
         user_message = f"""用户需求: {requirement}
 
-需求分析结果:
-{json.dumps(analysis, ensure_ascii=False, indent=2)}
+需求分析:
+{json.dumps(simplified_analysis, ensure_ascii=False, indent=2)}
 
-清理后的数据:
-{json.dumps(cleaned_data, ensure_ascii=False, indent=2)}
+数据来源（{len(cleaned_data if not config.SIMPLIFY_REPORT_INPUT else simplified_data)}条）:
+{data_str}
 
-请基于以上信息生成一份完整的研究报告。"""
+请基于以上信息生成一份简洁而全面的研究报告。要求：
+1. Markdown格式
+2. 包含数据分析和趋势
+3. 标注数据来源
+4. 保持客观准确"""
         
+        prompt_length = len(user_message)
+        print(f"  📊 Prompt长度: {prompt_length} 字符")
+        
+        report_start = time.time()
         report = self.call_llm(user_message, temperature=0.5)
+        report_duration = time.time() - report_start
         
-        print("\n报告生成完成！")
+        print(f"\n✓ 报告生成完成！（耗时: {report_duration:.2f}秒）")
         return report
 
 

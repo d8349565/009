@@ -144,10 +144,10 @@ class SearchEngine:
         else:
             print(f"\n共找到 {len(all_results)} 条搜索结果 (耗时: {elapsed_time:.1f}秒)")
         
-        # 截取前N条并提示
-        final_results = all_results[:self.max_results]
+        # 智能截取：优先取优先级高 + 内容完整的结果
+        final_results = self._smart_select_results(all_results, self.max_results)
         if len(all_results) > self.max_results:
-            print(f"  → 截取前 {self.max_results} 条用于分析（配置: MAX_SEARCH_RESULTS={self.max_results}）")
+            print(f"  → 智能筛选前 {len(final_results)} 条用于分析（配置: MAX_SEARCH_RESULTS={self.max_results}）")
         
         return final_results
     
@@ -192,6 +192,49 @@ class SearchEngine:
         
         # 优先来源排在前面
         return priority_results + normal_results
+    
+    def _smart_select_results(self, results: List[Dict[str, str]], max_count: int) -> List[Dict[str, str]]:
+        """
+        智能筛选结果：优先选择内容完整、来源权威的结果
+        
+        筛选策略：
+        1. 优先选择权威来源（priority_source=True）
+        2. 优先选择内容完整（字符数 > 300）的结果
+        3. 保持多样性（不同来源混合）
+        
+        Args:
+            results: 全部搜索结果
+            max_count: 最多选择多少条
+        
+        Returns:
+            筛选后的结果列表
+        """
+        if len(results) <= max_count:
+            return results
+        
+        # 分类：权威来源 vs 普通来源
+        priority_results = [r for r in results if r.get('priority_source')]
+        normal_results = [r for r in results if not r.get('priority_source')]
+        
+        # 对普通来源按内容完整度排序
+        def content_score(item):
+            """计算内容完整度分数"""
+            content_len = len(item.get('content', ''))
+            return content_len
+        
+        # 对普通结果按内容长度排序（降序）
+        normal_results.sort(key=content_score, reverse=True)
+        
+        # 分配名额：权威来源优先取，剩余名额给普通来源
+        priority_quota = min(len(priority_results), max(5, max_count // 3))  # 权威来源至少占1/3但不超过30%
+        normal_quota = max_count - priority_quota
+        
+        # 构建最终结果列表
+        selected = []
+        selected.extend(priority_results[:priority_quota])
+        selected.extend(normal_results[:normal_quota])
+        
+        return selected[:max_count]
     
     def _tavily_search(self, keyword: str) -> List[Dict[str, str]]:
         """

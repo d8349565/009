@@ -4,30 +4,11 @@
 from agents import (RequirementAnalyzer, InformationCollector, ReportWriter, 
                     QualityJudge)
 from search_engine import SearchEngine
+from performance_timer import PerformanceTimer
 import config
 import time
 import json
 from datetime import datetime
-
-
-def select_search_engine():
-    """让用户选择搜索引擎"""
-    print("\n" + "="*60)
-    print("请选择搜索引擎:")
-    print("="*60)
-    print("1. Tavily搜索 (推荐，需要API Key)")
-    print("2. SearXNG搜索 (本地搜索引擎，无需API Key)")
-    print("="*60)
-    
-    while True:
-        choice = input("请输入选项 (1/2，直接回车默认使用SearXNG): ").strip() or "2"
-        
-        if choice == "1":
-            return "tavily"
-        elif choice == "2":
-            return "searxng"
-        else:
-            print("无效选项，请重新输入")
 
 
 class ResearchAgentSystem:
@@ -39,13 +20,16 @@ class ResearchAgentSystem:
         
         Args:
             max_iterations: 最大循环次数，默认使用配置文件中的值
-            search_engine_type: 搜索引擎类型 ('tavily', 'searxng')
+            search_engine_type: 搜索引擎类型 ('tavily', 'searxng')，默认使用配置文件中的值
         """
         self.max_iterations = max_iterations or config.MAX_LOOP_COUNT
         
-        # 如果没有指定搜索引擎类型，让用户选择
+        # 使用配置文件中的搜索引擎类型
         if not search_engine_type:
-            search_engine_type = select_search_engine()
+            search_engine_type = config.SEARCH_ENGINE_TYPE
+        
+        # 初始化性能计时器
+        self.timer = PerformanceTimer()
         
         # 初始化系统时间并注入各Agent
         self.system_datetime = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -77,11 +61,22 @@ class ResearchAgentSystem:
     
     def _generate_report_info(self, iterations: int) -> str:
         """
-        生成报告的元信息（搜索引擎、搜索主题等）
+        生成报告的元信息（搜索引擎、搜索主题、配置、耗时统计等）
         """
         try:
             stats = self.search_engine.get_search_stats()
             engine_type = self.search_engine.engine_type.upper()
+            
+            # 获取总耗时
+            total_duration = self.timer.get_total_duration() if hasattr(self.timer, 'get_total_duration') else 0
+            
+            # 获取配置信息
+            search_mode = config.SEARCH_MODE
+            use_priority_sources = config.USE_PRIORITY_SOURCES
+            skip_evaluation = config.SKIP_EVALUATION
+            simplify_report = config.SIMPLIFY_REPORT_INPUT
+            content_length = config.CONTENT_EXTRACT_LENGTH
+            concurrent_evals = config.MAX_CONCURRENT_EVALUATIONS
             
             # 构建报告信息
             info_lines = [
@@ -89,13 +84,25 @@ class ResearchAgentSystem:
                 "",
                 "## 报告元信息",
                 "",
+                "### 基本信息",
+                "",
                 f"**搜索引擎**: {engine_type}",
                 f"**搜索主题**: {self.context['original_requirement']}",
                 f"**迭代轮次**: {iterations}",
+                f"**总耗时**: {total_duration:.2f}秒 ⏱️",
                 f"**总搜索次数**: {stats.get('total_search_calls', 0)}",
                 f"**搜索关键词数**: {stats.get('total_keyword_logs', 0)}",
                 f"**收集数据条数**: {len(self.context['collected_data'])}",
                 f"**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                "",
+                "### 配置信息",
+                "",
+                f"**搜索模式**: {'快速搜索' if search_mode == 'quick' else '完整搜索'}",
+                f"**优先搜索源**: {'启用' if use_priority_sources else '禁用'}",
+                f"**跳过评估**: {'是 ⚡' if skip_evaluation else '否'}",
+                f"**精简报告输入**: {'是 ⚡' if simplify_report else '否'}",
+                f"**内容提取长度**: {content_length} 字符 {'⚡' if content_length < 1000 else '📄' if content_length < 2500 else '📚'}",
+                f"**并发评估**: {'串行' if concurrent_evals == 1 else f'{concurrent_evals}批并发 ⚡⚡' if concurrent_evals >= 3 else f'{concurrent_evals}批并发'}",
                 ""
             ]
             
@@ -141,6 +148,9 @@ class ResearchAgentSystem:
         Returns:
             最终生成的报告
         """
+        # 开始总计时
+        self.timer.start_total()
+        
         print(f"\n{'='*60}")
         print(f"快速搜索模式 - 处理需求: {requirement}")
         print(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -152,20 +162,23 @@ class ResearchAgentSystem:
         try:
             # 步骤1: 需求分析
             print(f"\n[步骤1] 分析需求...")
+            self.timer.start("步骤1-需求分析", "分析用户需求并生成搜索关键词")
             analysis_result = self.requirement_analyzer.analyze(requirement)
+            self.timer.end("步骤1-需求分析", {'keywords_count': len(analysis_result.get('search_keywords', []))})
             
             # 步骤2: 搜索策略（使用分析结果中的关键词）
             search_keywords = analysis_result.get('search_keywords', [requirement])
             print(f"\n[步骤2] 搜索策略：全面了解主题")
-            print(f"搜索关键词: {search_keywords}")
             
             # 步骤3: 执行搜索
-            print(f"\n[步骤3] 执行搜索...")
+            print(f"[步骤3] 执行搜索...")
+            self.timer.start("步骤3-执行搜索", f"搜索 {len(search_keywords)} 个关键词")
             search_results = self.search_engine.search(search_keywords)
+            self.timer.end("步骤3-执行搜索", {'keywords_count': len(search_keywords), 'results_count': len(search_results)})
             
             # 显示搜索概要
             summary = self.search_engine.create_summary(search_results)
-            print(f"\n搜索概要:\n{summary}")
+            print(f"✓ 找到 {len(search_results)} 条搜索结果")
             
             # 记录搜索历史
             self.context['search_history'].append({
@@ -175,28 +188,48 @@ class ResearchAgentSystem:
                 'results_count': len(search_results)
             })
             
-            # 步骤4: 信息评估和清理
-            print(f"\n[步骤4] 评估信息可信度和相关性...")
-            collection_context = f"原始需求: {requirement}\n"
-            
-            cleaned_result = self.information_collector.evaluate_and_clean(
-                search_results, 
-                collection_context
-            )
-            
-            # 提取有效来源列表
-            cleaned_data = cleaned_result.get('valid_sources', [])
-            self.context['collected_data'] = cleaned_data
-            
-            print(f"收集到有效数据: {len(cleaned_data)} 条")
+            # 步骤4: 信息评估和清理（可选）
+            if config.SKIP_EVALUATION:
+                print(f"\n[步骤4] ⚡ 跳过信息评估（极速模式）")
+                # 直接使用搜索结果，转换为简化格式
+                cleaned_data = []
+                for idx, result in enumerate(search_results[:15], 1):  # 最多取15条
+                    cleaned_data.append({
+                        "title": result.get('title', '无标题'),
+                        "url": result.get('url', ''),
+                        "content_summary": result.get('content', '')[:300],
+                        "credibility_score": 7,  # 默认可信度
+                        "key_points": [],
+                        "data_found": "未评估"
+                    })
+                self.context['collected_data'] = cleaned_data
+                print(f"✓ 直接使用 {len(cleaned_data)} 条搜索结果")
+            else:
+                print(f"\n[步骤4] 评估信息可信度和相关性...")
+                self.timer.start("步骤4-信息评估", f"评估 {len(search_results)} 条搜索结果")
+                collection_context = f"原始需求: {requirement}\n"
+                
+                cleaned_result = self.information_collector.evaluate_and_clean(
+                    search_results, 
+                    collection_context
+                )
+                
+                # 提取有效来源列表
+                cleaned_data = cleaned_result.get('valid_sources', [])
+                self.context['collected_data'] = cleaned_data
+                self.timer.end("步骤4-信息评估", {'input_count': len(search_results), 'output_count': len(cleaned_data)})
+                
+                print(f"收集到有效数据: {len(cleaned_data)} 条")
             
             # 步骤5: 生成报告
             print(f"\n[步骤5] 生成报告...")
+            self.timer.start("步骤5-生成报告", f"基于 {len(cleaned_data)} 条数据生成报告")
             final_report = self.report_writer.generate_report(
                 requirement,
                 analysis_result,
                 self.context['collected_data']
             )
+            self.timer.end("步骤5-生成报告", {'data_sources': len(cleaned_data)})
             
             print(f"\n{'='*60}")
             print("✓ 快速搜索完成！")
@@ -209,6 +242,12 @@ class ResearchAgentSystem:
             import traceback
             traceback.print_exc()
             final_report = f"快速搜索失败: {str(e)}"
+        
+        # 结束总计时
+        self.timer.end_total()
+        
+        # 打印性能报告
+        self.timer.print_report(detailed=True)
         
         # 在报告末尾添加搜索信息
         report_info = self._generate_report_info(1)
@@ -267,15 +306,11 @@ class ResearchAgentSystem:
                     search_purpose = f"补充缺失信息: {', '.join(missing_aspects[:3])}"
                 
                 print(f"\n[步骤2] 搜索策略: {search_purpose}")
-                print(f"搜索关键词: {search_keywords}")
                 
                 # 步骤3: 执行搜索
-                print(f"\n[步骤3] 执行搜索...")
+                print(f"[步骤3] 执行搜索...")
                 search_results = self.search_engine.search(search_keywords)
-                
-                # 显示搜索概要
-                summary = self.search_engine.create_summary(search_results)
-                print(f"\n搜索概要:\n{summary}")
+                print(f"✓ 找到 {len(search_results)} 条搜索结果")
                 
                 # 记录搜索历史
                 self.context['search_history'].append({
@@ -429,7 +464,7 @@ class ResearchAgentSystem:
         
         return final_report_with_info
     
-    def save_report(self, report: str, filename: str = None, auto_open: bool = True):
+    def save_report(self, report: str, filename: str = None, auto_open: bool = True, topic: str = None):
         """
         保存Markdown报告到reports文件夹并自动打开
         
@@ -437,8 +472,10 @@ class ResearchAgentSystem:
             report: 报告内容
             filename: 文件名（默认自动生成）
             auto_open: 是否自动打开报告（默认True）
+            topic: 报告主题（用于生成有意义的文件名）
         """
         import os
+        import re
         
         # 创建reports文件夹（如果不存在）
         reports_dir = "reports"
@@ -447,8 +484,18 @@ class ResearchAgentSystem:
             print(f"✓ 已创建报告文件夹: {reports_dir}/")
         
         if filename is None:
-            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-            filename = f"report_{timestamp}.md"
+            # 如果提供了主题，使用主题生成文件名
+            if topic:
+                # 清理主题：去除特殊字符，保留中文、英文、数字
+                clean_topic = re.sub(r'[^\u4e00-\u9fff\w\-]', '', topic)
+                # 限制长度（最多30个字符）
+                clean_topic = clean_topic[:30]
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                filename = f"{clean_topic}_{timestamp}.md"
+            else:
+                # 如果没有主题，使用默认格式
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                filename = f"report_{timestamp}.md"
         
         # 构建完整路径
         filepath = os.path.join(reports_dir, filename)
@@ -496,37 +543,43 @@ def main():
     else:
         requirement = example_requirement
     
-    # 询问搜索模式
+    # 从配置文件读取所有设置
+    search_mode = config.SEARCH_MODE
+    max_iterations = config.MAX_LOOP_COUNT
+    use_priority_sources = config.USE_PRIORITY_SOURCES
+    skip_evaluation = config.SKIP_EVALUATION
+    simplify_report = config.SIMPLIFY_REPORT_INPUT
+    content_length = config.CONTENT_EXTRACT_LENGTH
+    concurrent_evals = config.MAX_CONCURRENT_EVALUATIONS
+    
+    # 显示当前配置
     print(f"\n{'='*60}")
-    print("搜索模式选择")
+    print("当前配置")
     print(f"{'='*60}")
-    print("1. 快速搜索 (一次搜索直接生成报告，速度快)")
-    print("2. 完整搜索 (多轮迭代优化，质量高) ")
-    print(f"{'='*60}")
+    print(f"搜索引擎: {config.SEARCH_ENGINE_TYPE.upper()}")
+    print(f"搜索模式: {'快速搜索' if search_mode == 'quick' else '完整搜索'}")
+    if search_mode == 'full':
+        print(f"最大迭代次数: {max_iterations}")
+    print(f"优先搜索源: {'启用' if use_priority_sources else '禁用'}")
+    print(f"跳过评估: {'是 ⚡' if skip_evaluation else '否'}")
+    print(f"精简报告输入: {'是 ⚡' if simplify_report else '否'}")
+    print(f"内容提取长度: {content_length} 字符 {'⚡' if content_length < 1000 else '📄' if content_length < 2500 else '📚'}")
+    print(f"并发评估: {'串行' if concurrent_evals == 1 else f'{concurrent_evals}批并发 ⚡⚡' if concurrent_evals >= 3 else f'{concurrent_evals}批并发'}")
     
-    mode_choice = input("请选择模式 (1/2，默认1-快速): ").strip() or "1"
-    quick_mode = mode_choice == "1"
-    
-    # 如果不是快速模式，询问最大循环次数
-    if not quick_mode:
-        max_iter_input = input(f"请输入最大循环次数 (默认 1): ").strip()
-        max_iterations = int(max_iter_input) if max_iter_input.isdigit() else 1
+    # 性能提示
+    if skip_evaluation:
+        print(f"\n💡 已跳过评估，预计耗时: 10-15秒")
     else:
-        max_iterations = 1
-    
-    # 询问是否启用优先搜索源
-    print(f"\n{'='*60}")
-    print("优先搜索源配置")
+        if concurrent_evals >= 3:
+            print(f"\n💡 使用并发评估（{concurrent_evals}批），大幅提速！预计耗时: 15-25秒")
+        else:
+            print(f"\n💡 使用串行评估，预计耗时: 30-50秒")
+        
+        if content_length < 1000:
+            print(f"⚠️  内容提取长度较短，数据可能不完整")
+        elif content_length >= 2000:
+            print(f"✓ 内容提取长度适中，数据完整性良好")
     print(f"{'='*60}")
-    print(f"系统可以优先搜索以下权威机构的信息：")
-    for i, org in enumerate(config.PRIORITY_SOURCES["organizations"][:10], 1):
-        print(f"  {i}. {org}")
-    if len(config.PRIORITY_SOURCES["organizations"]) > 10:
-        print(f"  ... 以及其他 {len(config.PRIORITY_SOURCES['organizations']) - 10} 个机构")
-    print(f"{'='*60}")
-    
-    priority_choice = input("是否启用优先搜索源？(y/N): ").strip().lower()
-    use_priority_sources = priority_choice in ['y', 'yes', '是']
     
     # 创建系统实例
     system = ResearchAgentSystem(max_iterations=max_iterations)
@@ -534,8 +587,8 @@ def main():
     # 配置搜索引擎的优先搜索源
     system.search_engine.enable_priority_sources(use_priority_sources)
     
-    # 根据模式选择处理方式
-    if quick_mode:
+    # 根据配置的模式选择处理方式
+    if search_mode == 'quick':
         print("\n[模式] 使用快速搜索模式")
         report = system.quick_search(requirement)
     else:
@@ -551,7 +604,7 @@ def main():
     
     # 自动保存并打开报告
     print("正在保存报告...")
-    system.save_report(report, auto_open=True)
+    system.save_report(report, auto_open=True, topic=requirement)
 
 
 if __name__ == "__main__":
