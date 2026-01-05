@@ -56,6 +56,10 @@ MAX_CONCURRENT_EVALUATIONS = int(os.getenv("MAX_CONCURRENT_EVALUATIONS", "3"))
 # 优先搜索源开关（是否启用权威机构优先搜索）
 USE_PRIORITY_SOURCES = os.getenv("USE_PRIORITY_SOURCES", "false").lower() == "true"
 
+# 智能停止配置
+# 首轮报告质量满足时是否自动停止（不继续迭代）
+EARLY_STOP_ON_SATISFACTION = os.getenv("EARLY_STOP_ON_SATISFACTION", "true").lower() == "true"
+
 # 优先搜索源配置
 PRIORITY_SOURCES = {
     "enabled": USE_PRIORITY_SOURCES,  # 使用环境变量控制

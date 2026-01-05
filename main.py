@@ -388,7 +388,12 @@ class ResearchAgentSystem:
                 # 保存本轮报告到历史
                 self.context['previous_reports'].append(final_report)
                 
-                # 步骤6: 质量判断（带历史判断上下文）
+                # 步骤6: 质量判断（最后一轮跳过评审，直接输出）
+                if iteration >= self.max_iterations:
+                    print(f"\n[步骤6] 已达到最大迭代次数 ({self.max_iterations})，跳过质量评审 ⚡")
+                    print(f"✓ 输出最终报告")
+                    break
+                
                 print(f"\n[步骤6] 质量评审...")
                 
                 judge_context = {
@@ -417,6 +422,12 @@ class ResearchAgentSystem:
                     print(f"总搜索次数: {len(self.context['search_history'])}")
                     print(f"总数据量: {len(self.context['collected_data'])}")
                     print(f"{'='*60}")
+                    
+                    # 首轮满足时的智能停止策略
+                    if iteration == 1 and config.EARLY_STOP_ON_SATISFACTION:
+                        print(f"\n💡 首轮报告质量已满足需求（配置: EARLY_STOP_ON_SATISFACTION=true）")
+                        print(f"✓ 自动停止，不继续迭代")
+                    
                     break
                 else:
                     print(f"\n{'='*60}")
@@ -424,10 +435,6 @@ class ResearchAgentSystem:
                     print(f"仍需补充: {', '.join(self.context['missing_aspects'][:5])}")
                     print(f"改进建议: {self.context['improvement_suggestions']}")
                     print(f"{'='*60}")
-                    
-                    if iteration >= self.max_iterations:
-                        print(f"\n已达到最大迭代次数 ({self.max_iterations})，输出当前最佳结果。")
-                        break
                     
                     time.sleep(1)  # 短暂延迟
             

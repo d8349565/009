@@ -195,12 +195,13 @@ class SearchEngine:
     
     def _smart_select_results(self, results: List[Dict[str, str]], max_count: int) -> List[Dict[str, str]]:
         """
-        智能筛选结果：优先选择内容完整、来源权威的结果
+        智能筛选结果：优先选择内容完整、来源权威、相关性高的结果
         
-        筛选策略：
+        筛选策略（优先级从高到低）：
         1. 优先选择权威来源（priority_source=True）
-        2. 优先选择内容完整（字符数 > 300）的结果
-        3. 保持多样性（不同来源混合）
+        2. 优先选择相关性高（score值高）的结果
+        3. 优先选择内容完整（字符数 > 300）的结果
+        4. 保持多样性（不同来源混合）
         
         Args:
             results: 全部搜索结果
@@ -216,14 +217,25 @@ class SearchEngine:
         priority_results = [r for r in results if r.get('priority_source')]
         normal_results = [r for r in results if not r.get('priority_source')]
         
-        # 对普通来源按内容完整度排序
-        def content_score(item):
-            """计算内容完整度分数"""
+        # 对普通来源按综合得分排序
+        def composite_score(item):
+            """
+            计算综合得分（相关性 + 内容完整度）
+            
+            返回: (relevance_score, content_length)
+            Python会先按第一个元素排序，相同时按第二个元素
+            """
+            # 1. 相关性分数（SearXNG的score参数，通常0-100）
+            relevance = item.get('score', 0)  # 如果没有score，默认为0
+            
+            # 2. 内容完整度分数
             content_len = len(item.get('content', ''))
-            return content_len
+            
+            # 返回元组：优先按相关性，其次按内容长度
+            return (relevance, content_len)
         
-        # 对普通结果按内容长度排序（降序）
-        normal_results.sort(key=content_score, reverse=True)
+        # 对普通结果按综合得分排序（降序）
+        normal_results.sort(key=composite_score, reverse=True)
         
         # 分配名额：权威来源优先取，剩余名额给普通来源
         priority_quota = min(len(priority_results), max(5, max_count // 3))  # 权威来源至少占1/3但不超过30%
@@ -315,7 +327,8 @@ class SearchEngine:
                 result = {
                     'title': item.get('title', '无标题'),
                     'url': item.get('url', ''),
-                    'content': item.get('content', '') or item.get('snippet', '')
+                    'content': item.get('content', '') or item.get('snippet', ''),
+                    'score': item.get('score', 0)  # 添加SearXNG的相关性评分
                 }
                 
                 # 尝试获取完整网页内容（提高数据完整性）
