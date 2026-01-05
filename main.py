@@ -2,13 +2,17 @@
 信息整理Agent系统 - 主程序
 """
 from agents import (RequirementAnalyzer, InformationCollector, ReportWriter, 
-                    QualityJudge)
+                    QualityJudge, ComprehensiveReportWriter)
 from search_engine import SearchEngine
 from performance_timer import PerformanceTimer
+from report_metadata import ReportMetadata, ReportIndex, extract_summary_from_markdown
+from document_parser import DocumentParser
 import config
 import time
 import json
+import os
 from datetime import datetime
+from typing import Dict, List, Any, Optional
 
 
 class ResearchAgentSystem:
@@ -42,6 +46,9 @@ class ResearchAgentSystem:
 
         # 初始化搜索引擎（传入用户选择的引擎类型）
         self.search_engine = SearchEngine(engine_type=search_engine_type)
+        
+        # 初始化报告索引系统
+        self.report_index = ReportIndex()
 
         # 上下文管理
         self.context = {
@@ -158,12 +165,14 @@ class ResearchAgentSystem:
         
         # 保存原始需求
         self.context['original_requirement'] = requirement
+        self.context['analysis_result'] = None  # 保存分析结果
         
         try:
             # 步骤1: 需求分析
             print(f"\n[步骤1] 分析需求...")
             self.timer.start("步骤1-需求分析", "分析用户需求并生成搜索关键词")
             analysis_result = self.requirement_analyzer.analyze(requirement)
+            self.context['analysis_result'] = analysis_result  # 保存到上下文
             self.timer.end("步骤1-需求分析", {'keywords_count': len(analysis_result.get('search_keywords', []))})
             
             # 步骤2: 搜索策略（使用分析结果中的关键词）
@@ -272,12 +281,14 @@ class ResearchAgentSystem:
         
         # 保存原始需求
         self.context['original_requirement'] = requirement
+        self.context['analysis_result'] = None  # 保存分析结果
         iteration = 0
         final_report = ""
         
         # 第一轮：需求分析（只做一次）
         print(f"\n[步骤1] 深度分析需求...")
         analysis_result = self.requirement_analyzer.analyze(requirement)
+        self.context['analysis_result'] = analysis_result  # 保存到上下文
         
         while iteration < self.max_iterations:
             iteration += 1
@@ -471,15 +482,18 @@ class ResearchAgentSystem:
         
         return final_report_with_info
     
-    def save_report(self, report: str, filename: str = None, auto_open: bool = True, topic: str = None):
+    def save_report(self, report: str, filename: str = None, auto_open: bool = True, topic: str = None, 
+                    analysis_result: Dict = None, search_keywords: List[str] = None):
         """
-        保存Markdown报告到reports文件夹并自动打开
+        保存Markdown报告到reports文件夹，同时生成元数据并更新索引
         
         Args:
             report: 报告内容
             filename: 文件名（默认自动生成）
             auto_open: 是否自动打开报告（默认True）
-            topic: 报告主题（用于生成有意义的文件名）
+            topic: 报告主题（用于生成有意义的文件名和元数据）
+            analysis_result: 需求分析结果（包含关键词等信息）
+            search_keywords: 搜索使用的关键词
         """
         import os
         import re
@@ -508,9 +522,19 @@ class ResearchAgentSystem:
         filepath = os.path.join(reports_dir, filename)
         
         try:
+            # 保存Markdown报告
             with open(filepath, 'w', encoding='utf-8') as f:
                 f.write(report)
             print(f"\n报告已保存到: {filepath}")
+            
+            # 生成并保存元数据
+            self._save_report_metadata(
+                filepath=filepath,
+                report_content=report,
+                topic=topic or "未分类",
+                analysis_result=analysis_result,
+                search_keywords=search_keywords
+            )
             
             # 自动打开报告
             if auto_open:
@@ -525,6 +549,298 @@ class ResearchAgentSystem:
                     
         except Exception as e:
             print(f"\n[错误] 保存或打开报告失败: {e}")
+    
+    def _save_report_metadata(self, filepath: str, report_content: str, topic: str,
+                             analysis_result: Dict = None, search_keywords: List[str] = None):
+        """
+        生成并保存报告元数据
+        
+        Args:
+            filepath: 报告文件路径
+            report_content: 报告内容
+            topic: 报告主题
+            analysis_result: 需求分析结果
+            search_keywords: 搜索关键词
+        """
+        try:
+            # 从报告中提取标题（第一行的# 标题）
+            lines = report_content.split('\n')
+            title = topic  # 默认使用主题作为标题
+            for line in lines:
+                if line.strip().startswith('# '):
+                    title = line.strip()[2:].strip()
+                    break
+            
+            # 提取摘要
+            summary = extract_summary_from_markdown(report_content, max_length=500)
+            
+            # 从分析结果中提取关键词
+            keywords = []
+            if analysis_result:
+                keywords = analysis_result.get('key_concepts', [])
+                if not keywords:
+                    keywords = analysis_result.get('search_keywords', [])[:5]
+            
+            # 使用搜索关键词
+            if not search_keywords and analysis_result:
+                search_keywords = analysis_result.get('search_keywords', [])
+            
+            # 从上下文中提取数据来源
+            data_sources = []
+            if hasattr(self, 'context') and self.context.get('collected_data'):
+                for item in self.context['collected_data'][:10]:  # 只保存前10个
+                    data_sources.append({
+                        'title': item.get('title', ''),
+                        'url': item.get('url', ''),
+                        'credibility': item.get('credibility_score', 5)
+                    })
+            
+            # 创建元数据对象
+            metadata = ReportMetadata(
+                title=title,
+                topic=topic,
+                content_summary=summary,
+                keywords=keywords,
+                data_sources=data_sources,
+                search_keywords=search_keywords or [],
+                file_path=filepath
+            )
+            
+            # 保存元数据文件
+            metadata.save_to_file(directory="reports")
+            
+            # 添加到索引
+            self.report_index.add_report(metadata)
+            
+        except Exception as e:
+            print(f"[警告] 元数据保存失败: {e}")
+            # 不影响主流程，继续执行
+    
+    def comprehensive_report_mode(self, user_input: str = None, outline_file: str = None):
+        """
+        综合报告制作模式
+        
+        工作流程：
+        1. 用户输入主题/纲要（或提供文件）
+        2. AI分析用户意图和报告框架
+        3. 从历史报告库中检索相关报告
+        4. 整合多个报告，进行交叉验证
+        5. 生成综合报告
+        
+        Args:
+            user_input: 用户输入的主题或描述
+            outline_file: 可选的大纲文件路径（MD/Word/PDF）
+        """
+        print("\n" + "="*60)
+        print("🎯 综合报告制作模式")
+        print("="*60 + "\n")
+        
+        self.timer.start_total()
+        
+        # 步骤1: 获取用户输入
+        if not user_input and not outline_file:
+            print("请选择输入方式：")
+            print("1. 直接输入主题描述")
+            print("2. 提供大纲文件路径（MD/Word/PDF）")
+            
+            choice = input("\n请选择 (1/2): ").strip()
+            
+            if choice == "2":
+                outline_file = input("请输入文件路径: ").strip()
+                if not os.path.exists(outline_file):
+                    print(f"[错误] 文件不存在: {outline_file}")
+                    return
+                
+                # 解析文件
+                try:
+                    self.timer.start("文件解析", "解析用户提供的大纲文件")
+                    doc_data = DocumentParser.parse_file(outline_file)
+                    self.timer.end("文件解析")
+                    
+                    print(f"\n✓ 文件解析成功！")
+                    print(f"  格式: {doc_data['format'].upper()}")
+                    print(f"  标题: {doc_data['title']}")
+                    print(f"\n大纲预览：")
+                    print(doc_data['outline'][:500])
+                    
+                    user_input = f"基于以下文档生成综合报告：\n\n标题: {doc_data['title']}\n\n大纲:\n{doc_data['outline']}\n\n内容:\n{doc_data['content'][:1000]}"
+                    
+                except Exception as e:
+                    print(f"[错误] 文件解析失败: {e}")
+                    return
+            else:
+                user_input = input("\n请输入综合报告主题: ").strip()
+                if not user_input:
+                    print("[错误] 主题不能为空")
+                    return
+        
+        self.context['original_requirement'] = user_input
+        
+        # 步骤2: 提取关键词（用于搜索相关报告）
+        self.timer.start("关键词提取", "从用户输入中提取关键词")
+        
+        print("\n" + "="*60)
+        print("📝 步骤1: 分析用户需求")
+        print("="*60)
+        
+        # 使用需求分析器提取关键词
+        analysis_result = self.requirement_analyzer.analyze(user_input)
+        keywords = analysis_result.get('keywords', [])
+        topic = analysis_result.get('main_topic', '')
+        
+        print(f"\n提取到的关键词: {', '.join(keywords[:10])}")
+        print(f"主题: {topic}")
+        
+        self.timer.end("关键词提取")
+        
+        # 步骤3: 搜索相关报告
+        self.timer.start("报告检索", "从历史报告库中检索相关报告")
+        
+        print("\n" + "="*60)
+        print("🔍 步骤2: 检索相关历史报告")
+        print("="*60)
+        
+        # 使用ReportIndex搜索相关报告
+        related_metadata = self.report_index.search(
+            keywords=keywords[:5],  # 使用前5个关键词
+            topic=topic,
+            limit=10
+        )
+        
+        if not related_metadata:
+            print("\n[警告] 未找到相关历史报告")
+            print("提示: 请先使用'单次调研模式'生成一些报告，再使用综合报告功能")
+            return
+        
+        print(f"\n找到 {len(related_metadata)} 个相关报告：")
+        for i, metadata in enumerate(related_metadata, 1):
+            print(f"  {i}. {metadata.title} (主题: {metadata.topic})")
+        
+        # 让用户选择要整合的报告
+        print("\n请选择要整合的报告：")
+        print("  1. 全部使用")
+        print("  2. 手动选择")
+        
+        choice = input("\n请选择 (1/2, 默认1): ").strip() or "1"
+        
+        selected_metadata = []
+        if choice == "2":
+            indices = input(f"请输入报告编号（用逗号分隔，如: 1,3,5）: ").strip()
+            try:
+                selected_indices = [int(i.strip()) - 1 for i in indices.split(',')]
+                selected_metadata = [related_metadata[i] for i in selected_indices if 0 <= i < len(related_metadata)]
+            except:
+                print("[警告] 输入格式错误，使用全部报告")
+                selected_metadata = related_metadata
+        else:
+            selected_metadata = related_metadata
+        
+        # 读取报告内容
+        related_reports = []
+        for metadata in selected_metadata:
+            content = self.report_index.get_report_content(metadata.report_id)
+            if content:
+                related_reports.append({
+                    'metadata': metadata,
+                    'content': content
+                })
+        
+        print(f"\n✓ 已加载 {len(related_reports)} 个报告")
+        
+        self.timer.end("报告检索")
+        
+        # 步骤4: 初始化综合报告Agent
+        comprehensive_writer = ComprehensiveReportWriter(system_datetime=self.system_datetime)
+        
+        # 步骤5: 分析并整合报告
+        self.timer.start("综合分析", "AI深度分析和整合多个报告")
+        
+        print("\n" + "="*60)
+        print("🧠 步骤3: AI综合分析与整合")
+        print("="*60)
+        
+        result = comprehensive_writer.analyze_and_integrate(
+            user_input=user_input,
+            related_reports=related_reports,
+            outline_file=outline_file
+        )
+        
+        self.timer.end("综合分析")
+        
+        # 步骤6: 保存综合报告
+        if result and result.get('report_content'):
+            report_content = result['report_content']
+            
+            # 添加元信息
+            report_with_meta = report_content + "\n\n" + self._generate_comprehensive_report_info(
+                len(selected_metadata),
+                result
+            )
+            
+            # 保存报告
+            topic_for_filename = topic or "综合报告"
+            self.save_report(
+                report=report_with_meta,
+                topic=topic_for_filename,
+                analysis_result={'keywords': keywords},
+                search_keywords=keywords
+            )
+            
+            print("\n" + "="*60)
+            print("✅ 综合报告制作完成！")
+            print("="*60)
+            
+            # 显示性能统计
+            print(self.timer.get_summary())
+        else:
+            print("\n[错误] 综合报告生成失败")
+    
+    def _generate_comprehensive_report_info(self, source_count: int, analysis_result: Dict) -> str:
+        """生成综合报告的元信息"""
+        total_duration = self.timer.get_total_duration()
+        
+        insights = analysis_result.get('new_insights', [])
+        validation = analysis_result.get('data_validation', {})
+        consistent_count = len(validation.get('consistent_data', []))
+        conflicting_count = len(validation.get('conflicting_data', []))
+        
+        info_lines = [
+            "---",
+            "",
+            "## 报告元信息",
+            "",
+            "### 综合报告信息",
+            "",
+            f"**报告类型**: 综合报告",
+            f"**整合报告数**: {source_count}",
+            f"**生成时间**: {self.system_datetime}",
+            f"**总耗时**: {total_duration:.2f}秒",
+            "",
+            "### 数据验证",
+            "",
+            f"**一致数据**: {consistent_count} 个",
+            f"**矛盾数据**: {conflicting_count} 个",
+            "",
+            "### 新发现洞察",
+            ""
+        ]
+        
+        if insights:
+            for i, insight in enumerate(insights[:10], 1):
+                info_lines.append(f"{i}. {insight}")
+        else:
+            info_lines.append("无")
+        
+        info_lines.extend([
+            "",
+            "### 系统配置",
+            "",
+            f"- AI模型: DeepSeek (推理模式)",
+            f"- 系统时间: {self.system_datetime}",
+            ""
+        ])
+        
+        return "\n".join(info_lines)
 
 
 def main():
@@ -536,6 +852,32 @@ def main():
         print("2. 在 .env 中填入你的 DeepSeek API 密钥")
         return
     
+    # 选择运行模式
+    print("\n" + "="*60)
+    print("🚀 信息整理Agent系统")
+    print("="*60 + "\n")
+    
+    print("请选择运行模式：")
+    print("  1. 单次调研模式 - 根据主题搜索并生成报告")
+    print("  2. 综合报告制作模式 - 整合多个历史报告生成综合分析 ✨新功能")
+    print("  3. 报告检索工具 - 查看和搜索历史报告")
+    
+    mode = input("\n请选择模式 (1/2/3, 默认1): ").strip() or "1"
+    
+    if mode == "2":
+        # 综合报告模式
+        system = ResearchAgentSystem()
+        system.comprehensive_report_mode()
+        return
+    
+    elif mode == "3":
+        # 启动报告检索工具
+        print("\n启动报告检索工具...")
+        import report_search
+        report_search.main()
+        return
+    
+    # 单次调研模式（原有功能）
     # 示例需求
     example_requirement = "近五年中国船舶涂料销售额"
     
@@ -602,6 +944,12 @@ def main():
         print("\n[模式] 使用完整搜索模式")
         report = system.process_requirement(requirement)
     
+    # 从系统上下文中获取分析结果和搜索关键词
+    analysis_result = system.context.get('analysis_result')
+    search_keywords = None
+    if system.context.get('search_history'):
+        search_keywords = system.context['search_history'][0].get('keywords', [])
+    
     # 显示最终报告
     print("\n" + "="*60)
     print("最终报告（Markdown格式）")
@@ -611,7 +959,8 @@ def main():
     
     # 自动保存并打开报告
     print("正在保存报告...")
-    system.save_report(report, auto_open=True, topic=requirement)
+    system.save_report(report, auto_open=True, topic=requirement, 
+                      analysis_result=analysis_result, search_keywords=search_keywords)
 
 
 if __name__ == "__main__":

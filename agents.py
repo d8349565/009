@@ -11,7 +11,8 @@ from agent_prompts import (
     REQUIREMENT_ANALYZER_PROMPT,
     INFORMATION_COLLECTOR_PROMPT,
     REPORT_WRITER_PROMPT,
-    QUALITY_JUDGE_PROMPT
+    QUALITY_JUDGE_PROMPT,
+    COMPREHENSIVE_REPORT_WRITER_PROMPT
 )
 
 
@@ -107,6 +108,11 @@ class RequirementAnalyzer(BaseAgent):
         response = self.call_llm(f"用户需求：{requirement}", temperature=0.3)
         duration = time.time() - start_time
         
+        print(f"  [需求分析师] API调用耗时: {duration:.2f}秒")
+        
+        # 首先尝试JSON解析
+        json_parsed = False
+        parsed_result = None
         try:
             # 尝试提取JSON
             if "```json" in response:
@@ -116,20 +122,74 @@ class RequirementAnalyzer(BaseAgent):
             else:
                 json_str = response
             
-            result = json.loads(json_str)
-            
-            print(f"✓ 需求分析完成 (耗时: {duration:.2f}秒)")
-            
-            return result
+            parsed_result = json.loads(json_str)
+            json_parsed = True
         except json.JSONDecodeError:
-            print("[警告] JSON解析失败，使用默认结果")
-            return {
-                "understanding": response[:200],
-                "key_concepts": [requirement],
-                "time_range": "未指定",
-                "search_keywords": [requirement],
-                "search_strategy": "通用搜索"
-            }
+            pass
+        except Exception as e:
+            print(f"  [调试] JSON处理异常: {type(e).__name__}: {e}")
+        
+        # 如果JSON解析成功，优先使用AI返回的字段（支持多种字段名）
+        if json_parsed and parsed_result:
+            # 获取关键词（支持不同的字段名）
+            keywords = (parsed_result.get('keywords') or 
+                       parsed_result.get('key_concepts') or 
+                       parsed_result.get('search_keywords') or [])
+            
+            # 获取主题
+            main_topic = (parsed_result.get('main_topic') or 
+                         parsed_result.get('topic') or 
+                         parsed_result.get('understanding', ''))
+            
+            # 如果关键词是字符串，转换为列表
+            if isinstance(keywords, str):
+                keywords = [keywords]
+            
+            # 如果获得了有效的关键词和主题，直接返回
+            if keywords and main_topic:
+                print(f"✓ 需求分析完成 (耗时: {duration:.2f}秒)")
+                result = parsed_result.copy()
+                result['keywords'] = keywords
+                result['main_topic'] = main_topic
+                return result
+        
+        # 如果JSON解析失败或缺少关键字段，使用强化的降级逻辑
+        print(f"  [调试] JSON解析失败或字段为空，使用降级逻辑")
+        print(f"  [调试] 响应前300字符: {response[:300]}")
+        
+        import re
+        
+        # 策略1：尝试从AI响应中智能提取关键词
+        # 查找被引号或括号括起来的内容
+        quoted = re.findall(r'[\"\'\"\'《》【】]([^\"\'\"\'《》【】]{2,})[\"\'\"\'《》【】]', response)
+        if quoted and len(quoted) > 0:
+            keywords = quoted[:8]
+        else:
+            # 策略2：提取中文短语（2-6个字）
+            keywords = re.findall(r'[\u4e00-\u9fff]{2,6}', requirement)
+            if not keywords:
+                # 策略3：按中文分隔符（，、）分割
+                keywords = [w.strip() for w in requirement.replace('、', '，').split('，') if w.strip()]
+            if not keywords:
+                # 策略4：字符分割
+                keywords = [requirement[:15], requirement[15:30]]
+        
+        # 过滤空值和去重，保留6个
+        keywords = list(dict.fromkeys(k for k in keywords if k and len(k.strip()) > 1))[:6]
+        
+        # 提取主题
+        topic = requirement.split('，')[0] if '，' in requirement else requirement[:50]
+        if not topic:
+            topic = requirement[:30]
+        
+        print(f"✓ 需求分析完成 (耗时: {duration:.2f}秒)")
+        
+        return {
+            "keywords": keywords,
+            "main_topic": topic,
+            "understanding": response[:200],
+            "search_strategy": "关键词拆分"
+        }
 
 
 class InformationCollector(BaseAgent):
@@ -432,5 +492,168 @@ class QualityJudge(BaseAgent):
                 "missing_aspects": [],
                 "improvement_suggestions": response[:200],
                 "decision": "满足需求"
+            }
+
+
+class ComprehensiveReportWriter(BaseAgent):
+    """综合报告撰写Agent - 负责整合多个报告生成综合分析"""
+    
+    def __init__(self, system_datetime: str = None):
+        super().__init__(
+            role="综合报告撰写员",
+            system_prompt=COMPREHENSIVE_REPORT_WRITER_PROMPT,
+            use_reasoner=True,  # 使用思考模式进行深度分析
+            system_datetime=system_datetime
+        )
+    
+    def analyze_and_integrate(self, 
+                            user_input: str,
+                            related_reports: List[Dict[str, Any]],
+                            outline_file: str = None) -> Dict[str, Any]:
+        """
+        分析用户需求并整合多个报告
+        
+        Args:
+            user_input: 用户输入的主题/纲要描述
+            related_reports: 相关报告列表，每个包含 metadata 和 content
+            outline_file: 可选的大纲文件路径（MD/Word/PDF）
+            
+        Returns:
+            包含分析结果和综合报告的字典
+        """
+        print(f"\n{'='*50}")
+        print(f"[{self.role}] 开始综合分析...")
+        print(f"{'='*50}")
+        
+        # 构建用户消息
+        user_message = f"""
+用户需求：
+{user_input}
+
+相关历史报告数量：{len(related_reports)}
+
+历史报告信息：
+"""
+        
+        for i, report_data in enumerate(related_reports, 1):
+            metadata = report_data.get('metadata')
+            content = report_data.get('content', '')
+            
+            # 限制每个报告内容长度，避免token超限
+            content_preview = content[:2000] if len(content) > 2000 else content
+            
+            user_message += f"""
+
+### 报告 {i}
+- 标题: {metadata.title}
+- 主题: {metadata.topic}
+- 关键词: {', '.join(metadata.keywords)}
+- 标签: {', '.join(metadata.tags)}
+- 摘要: {metadata.content_summary}
+- 创建时间: {metadata.created_at}
+
+内容预览：
+{content_preview}
+{"... (内容已截断)" if len(content) > 2000 else ""}
+
+---
+"""
+        
+        if outline_file:
+            user_message += f"\n\n用户提供的大纲文件：{outline_file}\n"
+        
+        user_message += """
+
+请完成以下任务：
+1. 分析用户意图，确定报告范围和关键维度
+2. 设计完整的报告大纲
+3. 分析每个历史报告的相关性和可用数据
+4. 进行数据交叉验证，识别一致和矛盾的数据
+5. 发现跨报告的新洞察
+6. 生成最终的综合报告（Markdown格式）
+
+**必须返回完整的JSON结构（见系统提示词）**
+"""
+        
+        response = self.call_llm(user_message, temperature=0.3)
+        
+        # 解析JSON响应
+        try:
+            if "```json" in response:
+                json_str = response.split("```json")[1].split("```")[0].strip()
+            elif "```" in response:
+                json_str = response.split("```")[1].split("```")[0].strip()
+            else:
+                json_str = response
+            
+            result = json.loads(json_str)
+            
+            # 显示分析结果
+            print("\n" + "="*50)
+            print("分析结果：")
+            print("="*50)
+            
+            analysis = result.get('analysis', {})
+            print(f"\n用户意图: {analysis.get('user_intent', '未识别')}")
+            print(f"报告范围: {analysis.get('report_scope', '未定义')}")
+            
+            if analysis.get('key_dimensions'):
+                print(f"关键维度: {', '.join(analysis['key_dimensions'])}")
+            
+            # 显示报告大纲
+            outline = analysis.get('outline', {})
+            if outline:
+                print(f"\n报告大纲：")
+                print(f"标题: {outline.get('title', '未定义')}")
+                for section in outline.get('sections', []):
+                    print(f"  - {section.get('section_name', '')}")
+                    for subsection in section.get('subsections', []):
+                        print(f"    • {subsection}")
+            
+            # 显示数据验证结果
+            validation = result.get('data_validation', {})
+            consistent_count = len(validation.get('consistent_data', []))
+            conflicting_count = len(validation.get('conflicting_data', []))
+            
+            print(f"\n数据验证：")
+            print(f"  一致数据: {consistent_count} 个")
+            print(f"  矛盾数据: {conflicting_count} 个")
+            
+            if conflicting_count > 0:
+                print(f"\n  矛盾数据详情：")
+                for conflict in validation.get('conflicting_data', [])[:3]:  # 只显示前3个
+                    print(f"    • {conflict.get('data_point', '')}")
+                    print(f"      来源1: {conflict.get('source1', {}).get('value', '')} ({conflict.get('source1', {}).get('from', '')})")
+                    print(f"      来源2: {conflict.get('source2', {}).get('value', '')} ({conflict.get('source2', {}).get('from', '')})")
+                    print(f"      建议: {conflict.get('recommendation', '')}")
+            
+            # 显示新洞察
+            insights = result.get('new_insights', [])
+            if insights:
+                print(f"\n发现的新洞察：")
+                for insight in insights[:5]:  # 只显示前5个
+                    print(f"  • {insight}")
+            
+            return result
+            
+        except json.JSONDecodeError as e:
+            print(f"\n[错误] JSON解析失败: {e}")
+            print(f"响应前500字符: {response[:500]}")
+            
+            # 返回降级结果
+            return {
+                "analysis": {
+                    "user_intent": "解析失败",
+                    "report_scope": "无法确定",
+                    "key_dimensions": [],
+                    "outline": {}
+                },
+                "related_reports_analysis": [],
+                "data_validation": {
+                    "consistent_data": [],
+                    "conflicting_data": []
+                },
+                "new_insights": [],
+                "report_content": "# 错误\n\n综合报告生成失败，请检查日志。\n\n原始响应：\n" + response[:1000]
             }
 
