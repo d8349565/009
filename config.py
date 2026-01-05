@@ -36,7 +36,7 @@ MAX_SEARCH_RESULTS = 30  # 最大搜索结果数量
 
 # 性能优化配置
 SKIP_EVALUATION = os.getenv("SKIP_EVALUATION", "false").lower() == "true"  # 是否跳过信息评估环节（极速模式）
-SIMPLIFY_REPORT_INPUT = os.getenv("SIMPLIFY_REPORT_INPUT", "true").lower() == "true"  # 是否精简报告生成的输入数据
+SIMPLIFY_REPORT_INPUT = os.getenv("SIMPLIFY_REPORT_INPUT", "false").lower() == "true"  # 是否精简报告生成的输入数据
 
 # 数据提取配置
 # 控制发送给AI评估的内容长度（字符数）

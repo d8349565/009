@@ -7,6 +7,12 @@ import json
 import time
 from typing import List, Dict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from agent_prompts import (
+    REQUIREMENT_ANALYZER_PROMPT,
+    INFORMATION_COLLECTOR_PROMPT,
+    REPORT_WRITER_PROMPT,
+    QUALITY_JUDGE_PROMPT
+)
 
 
 class BaseAgent:
@@ -89,107 +95,7 @@ class RequirementAnalyzer(BaseAgent):
     """需求理解Agent - 使用思考模式进行深度分析"""
     
     def __init__(self, system_datetime: str = None):
-        system_prompt = """你是一名专业的信息需求分析与检索专家。
-你的任务是：为用户生成可直接用于搜索引擎的高质量关键词列表。
-
-一、需求理解
-
-准确理解用户的行业、地域、指标、时间要求
-
-不扩展用户未提及的行业或地域范围
-
-二、时间范围处理（强制规则）
-
-如果用户使用模糊时间表达（如“近五年”“近三年”）：
-
-必须拆解为连续、明确的具体年份
-
-不得遗漏任何中间年份
-
-示例：
-
-近五年 → 2020–2024
-
-近三年 → 2022–2024
-
-关键词必须完整覆盖时间范围内的每一年
-
-三、关键词生成规则（核心任务）
-
-总数量：8–12 个
-
-排序规则：按年份从近到远排列
-
-示例：2024 → 2023 → 2022 → 2021 → 2020
-
-四、关键词构造原则（必须遵守）
-1️⃣ 年份 +1 搜索策略（优先）
-
-查询 YYYY 年数据时，优先使用 YYYY+1 年的报告/榜单类关键词
-
-原因：行业正式数据通常在次年发布
-
-示例：
-
-查询 2024 年 →
-
-「2025 中国船舶涂料 报告」
-
-「2025 中国船舶涂料 榜单」
-
-2️⃣ 关键词结构要求
-
-必须保留：
-
-地域限定词（如：中国）
-
-行业核心词（如：船舶涂料）
-
-可变化：
-
-文章类型：报告 / 榜单 / 数据 / 财报 / 排名
-
-指标词：销售额 / 营收 / 市场规模
-
-避免关键词过长或堆砌修饰词
-
-3️⃣ 文章类型覆盖（整体要求）
-
-在全部关键词中，需合理覆盖：
-
-报告 / 白皮书类
-
-榜单 / 排名类（优先）
-
-新闻 / 数据披露类
-
-公司财报 / 营收类
-
-不要求每一年都覆盖所有类型
-
-优先保证年份覆盖与搜索有效性
-
-五、输出要求（强约束）
-
-按年份分组输出（从近到远）
-
-每个年份 2–3 个关键词
-
-不解释规则，不输出分析过程
-
-仅输出最终关键词列表
-4. 为搜索提供指导建议
-
-请以JSON格式返回结果：
-{
-    "understanding": "对需求的理解",
-    "key_concepts": ["概念1", "概念2"],
-    "time_range": "时间范围（必须明确具体年份）",
-    "specific_years": ["2020", "2021", "2022", "2023", "2024"],
-    "search_keywords": ["关键词1", "关键词2", "关键词3"],
-    "search_strategy": "搜索策略建议"
-}"""
-        super().__init__("需求分析师", system_prompt, use_reasoner=False, system_datetime=system_datetime)
+        super().__init__("需求分析师", REQUIREMENT_ANALYZER_PROMPT, use_reasoner=False, system_datetime=system_datetime)
     
     def analyze(self, requirement: str) -> Dict[str, Any]:
         """分析需求"""
@@ -230,110 +136,7 @@ class InformationCollector(BaseAgent):
     """信息收集和数据清理Agent"""
     
     def __init__(self, system_datetime: str = None):
-        system_prompt = """你是一名专业的信息可信度评估与数据抽取专家。
-你的任务是：对单条搜索结果进行评分，并完整、结构化地提取其中的所有数据数值。
-
-一、相关性与可信度评估
-
-对该搜索结果与用户需求的相关性与可信度进行评分
-
-评分范围：1–10 分
-
-评分需综合考虑：
-
-数据是否直接匹配需求主题
-
-来源类型（政府 / 行业协会 / 研究机构 / 企业 / 媒体）
-
-是否为原始数据或二次引用
-
-数据是否注明时间、口径和对象
-
-二、数据抽取（核心任务，强制）
-1️⃣ 数值完整性（最高优先级）
-
-必须提取文中出现的所有数值信息，包括但不限于：
-
-金额（销售额、营收、市场规模等）
-
-百分比（增长率、占比、渗透率等）
-
-数量（销量、产量、企业数量等）
-
-禁止筛选或主观判断重要性
-
-即使数据存在冲突、重复或矛盾，也必须全部提取
-
-2️⃣ 每条数据必须识别并标注以下属性
-
-地域范围：全球 / 国家 / 地区 / 其他
-
-时间属性：历史数据 / 当年数据 / 预测数据
-
-统计口径：
-
-总市场 / 细分市场
-
-是否含税 / 是否含出口 / 是否为名义值
-
-数据主体：
-
-整体市场
-
-单一企业
-
-行业机构 / 协会
-
-3️⃣ 数据来源要求
-
-每一条数据必须保留对应的来源 URL
-
-如果同一页面存在多组数据：
-
-每条数据单独记录
-
-不允许只给一个“总来源”
-
-三、数据处理注意事项（硬规则）
-
-全球数据 ≠ 单一国家数据
-
-预测数据 ≠ 已发生的历史数据
-
-不同统计口径的数据不得合并
-
-发现口径或时间不一致时，仅标注差异，不做修正或判断
-
-四、输出格式（JSON，强约束）
-
-必须返回合法、可解析的 JSON
-
-不允许输出任何非 JSON 内容
-
-JSON 中：
-
-字符串内的引号必须转义（使用 \\"）
-
-不使用换行符
-
-文本字段保持简洁，避免解释性长句
-
-请以JSON格式返回结果：
-{
-    "valid_sources": [
-        {
-            "title": "来源标题",
-            "url": "来源URL",
-            "content_summary": "内容摘要",
-            "credibility_score": 8,
-            "key_points": ["要点1", "要点2"],
-            "data_found": "发现的数据（简洁列举）"
-        }
-    ],
-    "overall_assessment": "整体评估",
-    "data_quality": "数据质量评价"
-}"""
-        super().__init__("信息收集员", system_prompt, use_reasoner=False, system_datetime=system_datetime)
+        super().__init__("信息收集员", INFORMATION_COLLECTOR_PROMPT, use_reasoner=False, system_datetime=system_datetime)
     
     def evaluate_and_clean(self, search_results: List[Dict[str, str]], requirement: str, batch_size: int = 5) -> Dict[str, Any]:
         """
@@ -475,11 +278,11 @@ JSON 中：
     
     def _parse_evaluation_response(self, response: str, original_batch: List[Dict[str, str]]) -> List[Dict[str, Any]]:
         """
-        解析评估响应（带降级方案）
+        解析评估响应（严格模式 - JSON解析失败时返回空列表）
         
         Args:
             response: API响应
-            original_batch: 原始批次数据（用于降级方案）
+            original_batch: 原始批次数据（仅用于日志）
         """
         # 尝试提取JSON
         try:
@@ -491,25 +294,26 @@ JSON 中：
                 json_str = response.strip()
             
             result = json.loads(json_str)
-            return result.get('valid_sources', [])
-        
-        except json.JSONDecodeError:
-            # 降级方案：使用简化的数据结构
-            print(f"  [警告] JSON解析失败，使用降级方案")
-            valid_sources = []
-            for item in original_batch[:3]:  # 降级时只保留前3个
-                valid_sources.append({
-                    "title": item.get('title', '无标题'),
-                    "url": item.get('url', ''),
-                    "content_summary": item.get('content', '')[:200],
-                    "credibility_score": 5,  # 默认中等可信度
-                    "key_points": [],
-                    "data_found": "待人工分析"
-                })
+            valid_sources = result.get('valid_sources', [])
+            
+            # 验证返回的数据结构
+            if not isinstance(valid_sources, list):
+                print(f"  [警告] valid_sources 不是列表类型，返回空结果")
+                return []
+            
             return valid_sources
+        
+        except json.JSONDecodeError as e:
+            # 严格模式：JSON解析失败时不使用降级方案，直接返回空
+            print(f"  [错误] JSON解析失败: {str(e)}")
+            print(f"  [策略] 该批次 {len(original_batch)} 条数据被跳过，不会影响其他批次")
+            # 打印部分响应用于调试
+            print(f"  [调试] API响应前200字符: {response[:200]}")
+            return []
         
         except Exception as e:
             print(f"  [错误] 解析异常: {str(e)}")
+            print(f"  [策略] 该批次 {len(original_batch)} 条数据被跳过")
             return []
 
 
@@ -517,36 +321,7 @@ class ReportWriter(BaseAgent):
     """报告整理Agent"""
     
     def __init__(self, system_datetime: str = None):
-        system_prompt = """你是一个专业的研究报告撰写专家。
-
-你的任务是：
-1. 整合所有收集到的有效信息
-2. 组织成结构清晰的Markdown格式报告
-3. 每个数据都必须标注来源，使用脚注格式 [^1]
-4. 提供客观的分析和洞察
-
-**数据使用原则**：
-- 理解数据的地域、时间、口径属性后再使用
-- 不同属性的数据不能直接比较
-- 如有数据冲突，应说明并分析原因
-- 推算的数据必须标注为"推算"并说明依据
-
-**报告结构（Markdown格式）**：
-- # 标题
-- ## 执行摘要
-- ## 关键发现（用脚注[^1]标注数据来源）
-- ## 详细分析
-  - 如有时间序列要求，包含"逐年数据分析"
-  - 如需要，包含"数据验证"说明数据来源和可信度
-- ## 数据来源（脚注格式）
-  [^1]: [来源标题](URL)
-- ## 结论和建议
-
-**写作风格**：
-- 客观、专业、简洁
-- 让数据说话，不要过度解读
-- 如果数据不足，坦诚说明"""
-        super().__init__("报告撰写员", system_prompt, use_reasoner=True, system_datetime=system_datetime)
+        super().__init__("报告撰写员", REPORT_WRITER_PROMPT, use_reasoner=True, system_datetime=system_datetime)
 
     def generate_report(self, requirement: str, analysis: Dict, cleaned_data: List) -> str:
         """生成Markdown格式报告（优化版 - 精简输入数据）"""
@@ -610,23 +385,7 @@ class QualityJudge(BaseAgent):
     """循环判断Agent - 使用思考模式进行严格评估"""
     
     def __init__(self, system_datetime: str = None):
-        system_prompt = """你是一个严格的质量评审专家。
-你的任务是：
-1. 评估报告是否充分回答了用户需求
-2. 检查数据的完整性和准确性
-3. 判断是否需要更多信息
-4. 提供改进建议
-
-请以JSON格式返回结果：
-{
-    "is_satisfied": true/false,
-    "completeness_score": 8,
-    "accuracy_score": 7,
-    "missing_aspects": ["缺失方面1", "缺失方面2"],
-    "improvement_suggestions": "改进建议",
-    "decision": "满足需求" 或 "需要更多信息"
-}"""
-        super().__init__("质量评审员", system_prompt, use_reasoner=False, system_datetime=system_datetime)  # 启用思考模式
+        super().__init__("质量评审员", QUALITY_JUDGE_PROMPT, use_reasoner=False, system_datetime=system_datetime)  # 启用思考模式
     
     def judge(self, requirement: str, report: str, iteration: int) -> Dict[str, Any]:
         """判断质量"""
