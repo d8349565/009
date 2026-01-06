@@ -294,7 +294,7 @@ class InformationCollector(BaseAgent):
         # 显示结果摘要
         print(f"\n📊 评估汇总: 共找到 {len(all_valid_sources)} 个有效来源（耗时: {duration:.2f}秒）")
         if all_valid_sources:
-            for i, source in enumerate(all_valid_sources[:3], 1):
+            for i, source in enumerate(all_valid_sources[:10], 1):
                 print(f"  {i}. {source.get('title', '')[:50]}... [可信度: {source.get('credibility_score', 0)}/10]")
         
         return result
@@ -603,8 +603,8 @@ class ComprehensiveReportWriter(BaseAgent):
             content = report_data.get('content', '')
             
             # 限制每个报告内容长度，避免token超限
-            content_preview = content[:2000] if len(content) > 2000 else content
-            
+            content_preview = content[:5000] if len(content) > 5000 else content
+
             user_message += f"""
 
 ### 报告 {i}
