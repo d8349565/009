@@ -717,6 +717,6 @@ class ComprehensiveReportWriter(BaseAgent):
                     "conflicting_data": []
                 },
                 "new_insights": [],
-                "report_content": "# 错误\n\n综合报告生成失败，请检查日志。\n\n原始响应：\n" + response[:1000]
+                "comprehensive_report": "# 错误\n\n综合报告生成失败，请检查日志。\n\n原始响应：\n" + response[:1000]
             }
 

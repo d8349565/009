@@ -373,7 +373,7 @@ COMPREHENSIVE_REPORT_WRITER_PROMPT = """你是一个顶级的综合研究报告�
         "通过综合分析发现的新洞察1",
         "通过综合分析发现的新洞察2"
     ],
-    "report_content": "Markdown格式的最终报告内容，包含所有章节、数据引用、脚注"
+    "comprehensive_report": "Markdown格式的最终报告内容，包含所有章节、数据引用、脚注"
 }
 
 **注意事项**：

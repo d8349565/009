@@ -1,0 +1,38 @@
+{
+  "deepseek": {
+    "name": "DeepSeek",
+    "models": [
+      {
+        "id": "deepseek-chat",
+        "name": "DeepSeek Chat (基础模型)",
+        "description": "快速响应，适合一般任务"
+      },
+      {
+        "id": "deepseek-reasoner",
+        "name": "DeepSeek Reasoner (推理模型)",
+        "description": "深度推理，适合复杂分析"
+      }
+    ]
+  },
+  "zhipu": {
+    "name": "智谱AI (Zhipu)",
+    "models": [
+      {
+        "id": "glm-4.7",
+        "name": "glm-4.7",
+        "description": "glm-4.7"
+      }
+    ]
+  },
+  "openrouter": {
+    "name": "OpenRouter (聚合)",
+    "models": [
+      {
+        "id": "xiaomi/mimo-v2-flash:free",
+        "name": "Mimo v2 Flash (免费)",
+        "description": "小米免费模型"
+      }
+    ]
+  },
+  "_comment": "用户可以编辑此文件添加新的供应商和模型。修改后重启GUI生效。"
+}
