@@ -7,11 +7,81 @@ from dotenv import load_dotenv
 # 加载环境变量
 load_dotenv()
 
+# ============================================================
+# LLM供应商配置
+# ============================================================
+
 # DeepSeek API配置
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 DEEPSEEK_MODEL = "deepseek-chat"  # 普通聊天模型
 DEEPSEEK_REASONER = "deepseek-reasoner"  # 思考模式（推理模型）
+
+# 智谱AI (GLM) 配置
+ZHIPU_API_KEY = os.getenv("ZHIPU_API_KEY", "")
+ZHIPU_BASE_URL = os.getenv("ZHIPU_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")
+
+# OpenRouter 配置（聚合多个模型）
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_DEFAULT_MODEL = os.getenv("OPENROUTER_DEFAULT_MODEL", "xiaomi/mimo-v2-flash:free")
+OPENROUTER_REASONER_MODEL = os.getenv("OPENROUTER_REASONER_MODEL", "openai/o1-preview")
+
+# ============================================================
+# Agent模型配置 - 为每个Agent指定使用的提供商
+# ============================================================
+# 
+# 💡 配置方式（按优先级）：
+# 1. 环境变量 (.env文件) - 最高优先级
+# 2. agent_config.py 预设方案 - 推荐使用
+# 3. 下面的默认值 - 兜底配置
+#
+# 📝 推荐：直接修改 agent_config.py 文件选择预设方案
+#    运行 'python agent_config.py' 查看当前配置
+#
+# 可选值: 'deepseek', 'zhipu'/'glm', 'openrouter'
+
+# 尝试从 agent_config.py 加载配置
+try:
+    from agent_config import get_active_agent_config
+    _agent_config = get_active_agent_config()
+    
+    # 需求分析师
+    REQUIREMENT_ANALYZER_PROVIDER = os.getenv(
+        "REQUIREMENT_ANALYZER_PROVIDER",
+        _agent_config.get("requirement_analyzer", {}).get("provider", "deepseek")
+    )
+    
+    # 信息收集员
+    INFORMATION_COLLECTOR_PROVIDER = os.getenv(
+        "INFORMATION_COLLECTOR_PROVIDER",
+        _agent_config.get("information_collector", {}).get("provider", "deepseek")
+    )
+    
+    # 报告撰写员
+    REPORT_WRITER_PROVIDER = os.getenv(
+        "REPORT_WRITER_PROVIDER",
+        _agent_config.get("report_writer", {}).get("provider", "deepseek")
+    )
+    
+    # 质量评审员
+    QUALITY_JUDGE_PROVIDER = os.getenv(
+        "QUALITY_JUDGE_PROVIDER",
+        _agent_config.get("quality_judge", {}).get("provider", "deepseek")
+    )
+    
+    # 综合报告撰写员
+    COMPREHENSIVE_REPORT_WRITER_PROVIDER = os.getenv(
+        "COMPREHENSIVE_REPORT_WRITER_PROVIDER",
+        _agent_config.get("comprehensive_report_writer", {}).get("provider", "deepseek")
+    )
+    
+except ImportError:
+    # 如果 agent_config.py 不存在，使用默认配置
+    REQUIREMENT_ANALYZER_PROVIDER = os.getenv("REQUIREMENT_ANALYZER_PROVIDER", "deepseek")
+    INFORMATION_COLLECTOR_PROVIDER = os.getenv("INFORMATION_COLLECTOR_PROVIDER", "deepseek")
+    REPORT_WRITER_PROVIDER = os.getenv("REPORT_WRITER_PROVIDER", "deepseek")
+    QUALITY_JUDGE_PROVIDER = os.getenv("QUALITY_JUDGE_PROVIDER", "deepseek")
+    COMPREHENSIVE_REPORT_WRITER_PROVIDER = os.getenv("COMPREHENSIVE_REPORT_WRITER_PROVIDER", "deepseek")
 
 # SearXNG搜索引擎配置
 SEARXNG_ENABLED = os.getenv("SEARXNG_ENABLED", "false").lower() == "true"

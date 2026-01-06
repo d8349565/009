@@ -5,7 +5,7 @@ from openai import OpenAI
 import config
 import json
 import time
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from agent_prompts import (
     REQUIREMENT_ANALYZER_PROMPT,
@@ -14,25 +14,41 @@ from agent_prompts import (
     QUALITY_JUDGE_PROMPT,
     COMPREHENSIVE_REPORT_WRITER_PROMPT
 )
+from llm_providers import get_llm_manager
 
 
 class BaseAgent:
     """Agent基类"""
     
-    def __init__(self, role: str, system_prompt: str, use_reasoner: bool = False, system_datetime: str = None):
+    def __init__(self, 
+                 role: str, 
+                 system_prompt: str, 
+                 use_reasoner: bool = False, 
+                 system_datetime: str = None,
+                 provider: Optional[str] = None,
+                 model: Optional[str] = None):
         """
         初始化Agent
         
         Args:
             role: Agent角色名称
             system_prompt: 系统提示词
-            use_reasoner: 是否使用DeepSeek推理模型（思考模式）
+            use_reasoner: 是否使用推理模型（思考模式）
+            system_datetime: 系统时间（由 ResearchAgentSystem 注入）
+            provider: LLM提供商 (deepseek/zhipu/glm/openrouter)，None则使用默认
+            model: 指定模型名称（可选），None则根据use_reasoner自动选择
         """
         self.role = role
         self.system_prompt = system_prompt
         self.use_reasoner = use_reasoner
-        # 系统时间（由 ResearchAgentSystem 注入），用于让LLM知道当前时间
         self.system_datetime = system_datetime
+        
+        # LLM提供商配置
+        self.provider_name = provider or "deepseek"  # 默认使用DeepSeek
+        self.model_name = model  # None表示自动选择
+        self.llm_manager = get_llm_manager()
+        
+        # 向后兼容：保留原有的client（用于直接调用DeepSeek）
         self.client = OpenAI(
             api_key=config.DEEPSEEK_API_KEY,
             base_url=config.DEEPSEEK_BASE_URL
@@ -40,7 +56,7 @@ class BaseAgent:
     
     def call_llm(self, user_message: str, temperature: float = 0.7) -> str:
         """
-        调用DeepSeek API
+        调用LLM API（支持多提供商）
         
         Args:
             user_message: 用户消息
@@ -50,41 +66,52 @@ class BaseAgent:
             AI响应内容
         """
         try:
-            # 根据配置选择模型
-            model = config.DEEPSEEK_REASONER if self.use_reasoner else config.DEEPSEEK_MODEL
+            # 构建系统消息（注入时间信息）
+            system_content = self.system_prompt
+            if getattr(self, 'system_datetime', None):
+                system_content = f"当前时间: {self.system_datetime}\n\n" + system_content
+            
+            messages = [
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": user_message}
+            ]
+            
+            # 显示使用的提供商和模型
+            provider = self.llm_manager.get_provider(self.provider_name)
+            if not provider:
+                print(f"  [{self.role}] 警告: 提供商 '{self.provider_name}' 不可用，回退到DeepSeek")
+                self.provider_name = "deepseek"
+                provider = self.llm_manager.get_provider("deepseek")
+            
+            model_to_use = self.model_name or provider.get_model(self.use_reasoner)
             
             if self.use_reasoner:
                 print(f"  [{self.role}] 使用思考模式进行深度分析...")
+            print(f"  [{self.role}] 提供商: {self.provider_name.upper()}, 模型: {model_to_use}")
             
             # 记录API调用开始时间
             api_start_time = time.time()
             
-            # 如果有系统时间，先把时间信息注入到system prompt中
-            system_content = self.system_prompt
-            if getattr(self, 'system_datetime', None):
-                system_content = f"当前时间: {self.system_datetime}\n\n" + system_content
-
-            response = self.client.chat.completions.create(
-                model=model,
-                messages=[
-                    {"role": "system", "content": system_content},
-                    {"role": "user", "content": user_message}
-                ],
+            # 调用LLM
+            result = self.llm_manager.call_llm(
+                provider_name=self.provider_name,
+                messages=messages,
+                model=model_to_use,
+                use_reasoner=self.use_reasoner,
                 temperature=temperature
             )
+            
+            # 处理返回结果（可能是字符串或元组）
+            if isinstance(result, tuple):
+                content, reasoning = result
+                if reasoning:
+                    print(f"  [思考过程] {reasoning[:200]}..." if len(reasoning) > 200 else f"  [思考过程] {reasoning}")
+            else:
+                content = result
             
             # 记录API调用耗时
             api_duration = time.time() - api_start_time
             print(f"  [{self.role}] API调用耗时: {api_duration:.2f}秒")
-            
-            # 如果是推理模型，可能会有reasoning_content
-            content = response.choices[0].message.content
-            
-            # 显示推理过程（如果有）
-            if self.use_reasoner and hasattr(response.choices[0].message, 'reasoning_content'):
-                reasoning = response.choices[0].message.reasoning_content
-                if reasoning:
-                    print(f"  [思考过程] {reasoning[:200]}..." if len(reasoning) > 200 else f"  [思考过程] {reasoning}")
             
             return content
         except Exception as e:
@@ -95,8 +122,15 @@ class BaseAgent:
 class RequirementAnalyzer(BaseAgent):
     """需求理解Agent - 使用思考模式进行深度分析"""
     
-    def __init__(self, system_datetime: str = None):
-        super().__init__("需求分析师", REQUIREMENT_ANALYZER_PROMPT, use_reasoner=False, system_datetime=system_datetime)
+    def __init__(self, system_datetime: str = None, provider: str = None):
+        provider = provider or config.REQUIREMENT_ANALYZER_PROVIDER
+        super().__init__(
+            "需求分析师", 
+            REQUIREMENT_ANALYZER_PROMPT, 
+            use_reasoner=False, 
+            system_datetime=system_datetime,
+            provider=provider
+        )
     
     def analyze(self, requirement: str) -> Dict[str, Any]:
         """分析需求"""
@@ -195,8 +229,15 @@ class RequirementAnalyzer(BaseAgent):
 class InformationCollector(BaseAgent):
     """信息收集和数据清理Agent"""
     
-    def __init__(self, system_datetime: str = None):
-        super().__init__("信息收集员", INFORMATION_COLLECTOR_PROMPT, use_reasoner=False, system_datetime=system_datetime)
+    def __init__(self, system_datetime: str = None, provider: str = None):
+        provider = provider or config.INFORMATION_COLLECTOR_PROVIDER
+        super().__init__(
+            "信息收集员", 
+            INFORMATION_COLLECTOR_PROMPT, 
+            use_reasoner=False, 
+            system_datetime=system_datetime,
+            provider=provider
+        )
     
     def evaluate_and_clean(self, search_results: List[Dict[str, str]], requirement: str, batch_size: int = 5) -> Dict[str, Any]:
         """
@@ -380,8 +421,15 @@ class InformationCollector(BaseAgent):
 class ReportWriter(BaseAgent):
     """报告整理Agent"""
     
-    def __init__(self, system_datetime: str = None):
-        super().__init__("报告撰写员", REPORT_WRITER_PROMPT, use_reasoner=True, system_datetime=system_datetime)
+    def __init__(self, system_datetime: str = None, provider: str = None):
+        provider = provider or config.REPORT_WRITER_PROVIDER
+        super().__init__(
+            "报告撰写员", 
+            REPORT_WRITER_PROMPT, 
+            use_reasoner=True, 
+            system_datetime=system_datetime,
+            provider=provider
+        )
 
     def generate_report(self, requirement: str, analysis: Dict, cleaned_data: List) -> str:
         """生成Markdown格式报告（优化版 - 精简输入数据）"""
@@ -444,8 +492,15 @@ class ReportWriter(BaseAgent):
 class QualityJudge(BaseAgent):
     """循环判断Agent - 使用思考模式进行严格评估"""
     
-    def __init__(self, system_datetime: str = None):
-        super().__init__("质量评审员", QUALITY_JUDGE_PROMPT, use_reasoner=False, system_datetime=system_datetime)  # 启用思考模式
+    def __init__(self, system_datetime: str = None, provider: str = None):
+        provider = provider or config.QUALITY_JUDGE_PROVIDER
+        super().__init__(
+            "质量评审员", 
+            QUALITY_JUDGE_PROMPT, 
+            use_reasoner=False, 
+            system_datetime=system_datetime,
+            provider=provider
+        )
     
     def judge(self, requirement: str, report: str, iteration: int) -> Dict[str, Any]:
         """判断质量"""
@@ -498,12 +553,14 @@ class QualityJudge(BaseAgent):
 class ComprehensiveReportWriter(BaseAgent):
     """综合报告撰写Agent - 负责整合多个报告生成综合分析"""
     
-    def __init__(self, system_datetime: str = None):
+    def __init__(self, system_datetime: str = None, provider: str = None):
+        provider = provider or config.COMPREHENSIVE_REPORT_WRITER_PROVIDER
         super().__init__(
             role="综合报告撰写员",
             system_prompt=COMPREHENSIVE_REPORT_WRITER_PROMPT,
             use_reasoner=True,  # 使用思考模式进行深度分析
-            system_datetime=system_datetime
+            system_datetime=system_datetime,
+            provider=provider
         )
     
     def analyze_and_integrate(self, 

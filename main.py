@@ -879,7 +879,7 @@ def main():
     
     # 单次调研模式（原有功能）
     # 示例需求
-    example_requirement = "近五年中国船舶涂料销售额"
+    example_requirement = "2024年中国船舶涂料销售额"
     
     print("\n" + "="*60)
     print("示例需求:", example_requirement)
