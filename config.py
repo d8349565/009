@@ -130,6 +130,18 @@ USE_PRIORITY_SOURCES = os.getenv("USE_PRIORITY_SOURCES", "false").lower() == "tr
 # 首轮报告质量满足时是否自动停止（不继续迭代）
 EARLY_STOP_ON_SATISFACTION = os.getenv("EARLY_STOP_ON_SATISFACTION", "true").lower() == "true"
 
+# ============================================================
+# 日志输出配置
+# ============================================================
+# 控制日志输出的详细程度
+# verbose   - 详细模式，显示所有日志（包括API调用详情、提供商信息等）
+# normal    - 正常模式，显示关键步骤和结果（推荐）
+# minimal   - 精简模式，只显示核心进度和最终结果
+LOG_LEVEL = os.getenv("LOG_LEVEL", "normal").lower()
+
+# 是否在控制台打印最终报告内容
+PRINT_FINAL_REPORT = os.getenv("PRINT_FINAL_REPORT", "false").lower() == "true"
+
 # 优先搜索源配置
 PRIORITY_SOURCES = {
     "enabled": USE_PRIORITY_SOURCES,  # 使用环境变量控制

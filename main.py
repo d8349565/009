@@ -15,6 +15,65 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional
 
 
+def print_model_configuration():
+    """打印当前使用的模型配置（表格形式）"""
+    try:
+        from agent_config import get_active_agent_config, AGENT_CONFIG_PRESET
+        
+        config_data = get_active_agent_config()
+        
+        print("\n" + "="*80)
+        print(f"🤖 当前使用的AI模型配置（方案: {AGENT_CONFIG_PRESET.upper()}）")
+        print("="*80)
+        
+        # Agent名称映射
+        agent_names = {
+            "requirement_analyzer": "需求分析师",
+            "information_collector": "信息收集员",
+            "report_writer": "报告撰写员",
+            "quality_judge": "质量评审员",
+            "comprehensive_report_writer": "综合报告撰写员"
+        }
+        
+        # 打印表头
+        print(f"\n{'Agent名称':<20} {'供应商':<12} {'模型':<30} {'推理':<6} {'说明'}")
+        print("-" * 80)
+        
+        # 打印每个Agent的配置
+        for agent_key, settings in config_data.items():
+            agent_name = agent_names.get(agent_key, agent_key)
+            provider = settings['provider'].upper()
+            model = settings.get('model') or '(自动选择)'
+            reasoner = "是" if settings.get('use_reasoner') else "否"
+            
+            # 🔍 如果是OpenRouter，显示实际会使用的模型
+            if provider == 'OPENROUTER':
+                if reasoner == "是":
+                    # 推理模式：使用 OPENROUTER_REASONER_MODEL
+                    actual_model = os.getenv('OPENROUTER_REASONER_MODEL', model)
+                else:
+                    # 普通模式：使用 OPENROUTER_DEFAULT_MODEL
+                    actual_model = os.getenv('OPENROUTER_DEFAULT_MODEL', model)
+                model = actual_model  # 显示实际使用的模型
+            
+            # 优化说明：移除冗长的环境变量提示
+            desc = settings.get('description', '')
+            # 移除 "[供应商从.env]" 等提示，保留核心说明
+            desc = desc.split('[')[0].strip() if '[' in desc else desc
+            desc = desc[:20]  # 截断过长的描述
+            
+            print(f"{agent_name:<18} {provider:<12} {model:<30} {reasoner:<6} {desc}")
+        
+        print("="*80 + "\n")
+        
+        return config_data  # 返回配置数据供后续使用
+        
+    except Exception as e:
+        print(f"⚠️  无法加载模型配置: {e}")
+        print("使用默认配置继续...\n")
+        return None
+
+
 class ResearchAgentSystem:
     """研究型Agent系统 - 支持上下文累积和迭代优化"""
     
@@ -68,81 +127,64 @@ class ResearchAgentSystem:
     
     def _generate_report_info(self, iterations: int) -> str:
         """
-        生成报告的元信息（搜索引擎、搜索主题、配置、耗时统计等）
+        生成报告的元信息（精简版）- 只保留核心统计数据
         """
         try:
             stats = self.search_engine.get_search_stats()
-            engine_type = self.search_engine.engine_type.upper()
             
             # 获取总耗时
             total_duration = self.timer.get_total_duration() if hasattr(self.timer, 'get_total_duration') else 0
             
-            # 获取配置信息
-            search_mode = config.SEARCH_MODE
-            use_priority_sources = config.USE_PRIORITY_SOURCES
-            skip_evaluation = config.SKIP_EVALUATION
-            simplify_report = config.SIMPLIFY_REPORT_INPUT
-            content_length = config.CONTENT_EXTRACT_LENGTH
-            concurrent_evals = config.MAX_CONCURRENT_EVALUATIONS
+            # 计算有效数据条数
+            total_data = len(self.context.get('collected_data', []))
+            effective_count = sum(1 for data in self.context.get('collected_data', []) 
+                                if data.get('credibility_score', 0) >= 5)
             
-            # 构建报告信息
+            # 构建精简的报告信息
             info_lines = [
                 "---",
                 "",
-                "## 报告元信息",
+                "## 报告元数据",
                 "",
-                "### 基本信息",
-                "",
-                f"**搜索引擎**: {engine_type}",
-                f"**搜索主题**: {self.context['original_requirement']}",
-                f"**迭代轮次**: {iterations}",
-                f"**总耗时**: {total_duration:.2f}秒 ⏱️",
-                f"**总搜索次数**: {stats.get('total_search_calls', 0)}",
-                f"**搜索关键词数**: {stats.get('total_keyword_logs', 0)}",
-                f"**收集数据条数**: {len(self.context['collected_data'])}",
+                f"**研究主题**: {self.context['original_requirement']}  ",
+                f"**数据来源**: {total_data} 条（有效 {effective_count} 条） | **搜索次数**: {stats.get('total_search_calls', 0)} | **总耗时**: {total_duration:.1f}秒  ",
                 f"**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-                "",
-                "### 配置信息",
-                "",
-                f"**搜索模式**: {'快速搜索' if search_mode == 'quick' else '完整搜索'}",
-                f"**优先搜索源**: {'启用' if use_priority_sources else '禁用'}",
-                f"**跳过评估**: {'是 ⚡' if skip_evaluation else '否'}",
-                f"**精简报告输入**: {'是 ⚡' if simplify_report else '否'}",
-                f"**内容提取长度**: {content_length} 字符 {'⚡' if content_length < 1000 else '📄' if content_length < 2500 else '📚'}",
-                f"**并发评估**: {'串行' if concurrent_evals == 1 else f'{concurrent_evals}批并发 ⚡⚡' if concurrent_evals >= 3 else f'{concurrent_evals}批并发'}",
                 ""
             ]
             
-            # 添加搜索关键词明细
-            if stats.get('keyword_logs'):
-                info_lines.append("### 搜索关键词明细")
-                info_lines.append("")
-                for ln in stats.get('keyword_logs', []):
-                    keyword = ln.get('keyword', '')
-                    results = ln.get('results_count', 0)
-                    duration = ln.get('duration', 0)
-                    info_lines.append(f"- **{keyword}** | 结果数: {results} | 耗时: {duration:.2f}s")
-                info_lines.append("")
-            
-            # 添加收集到的数据来源列表
+            # 只显示可信度≥7的核心数据来源（最多5条）
             if self.context.get('collected_data'):
-                info_lines.append("### 收集到的数据来源")
-                info_lines.append("")
-                for idx, data in enumerate(self.context['collected_data'], 1):
-                    title = data.get('title', '无标题')
-                    url = data.get('url', '')
-                    credibility = data.get('credibility_score', 'N/A')
-                    data_found = data.get('data_found', '无')
+                high_quality_sources = [
+                    data for data in self.context['collected_data']
+                    if data.get('credibility_score', 0) >= 7
+                ]
+                
+                if high_quality_sources:
+                    info_lines.extend([
+                        "**核心数据来源**（可信度≥7分）：",
+                        ""
+                    ])
                     
-                    info_lines.append(f"**{idx}. {title}**")
-                    if url:
-                        info_lines.append(f"   - URL: {url}")
-                    info_lines.append(f"   - 可信度: {credibility}/10")
-                    info_lines.append(f"   - 关键数据: {data_found}")
+                    for idx, data in enumerate(high_quality_sources[:5], 1):  # 最多显示5条
+                        title = data.get('title', '无标题')[:60]  # 限制标题长度
+                        url = data.get('url', '')
+                        credibility = data.get('credibility_score', 'N/A')
+                        
+                        info_lines.append(f"{idx}. [{title}]({url}) `可信度: {credibility}/10`")
+                        
+                        # 显示关键数据（如果存在）
+                        data_found = data.get('data_found', '')
+                        if data_found and data_found != '无' and data_found != '未评估':
+                            # 限制关键数据长度到100字符
+                            key_data_preview = data_found[:100] + ('...' if len(data_found) > 100 else '')
+                            info_lines.append(f"   - 💡 关键数据: {key_data_preview}")
+                    
                     info_lines.append("")
             
             return "\n".join(info_lines)
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return f"> 报告元信息生成失败: {str(e)}"
     
     def quick_search(self, requirement: str) -> str:
@@ -930,6 +972,9 @@ def main():
             print(f"✓ 内容提取长度适中，数据完整性良好")
     print(f"{'='*60}")
     
+    # 显示模型配置
+    model_config = print_model_configuration()
+    
     # 创建系统实例
     system = ResearchAgentSystem(max_iterations=max_iterations)
     
@@ -950,15 +995,18 @@ def main():
     if system.context.get('search_history'):
         search_keywords = system.context['search_history'][0].get('keywords', [])
     
-    # 显示最终报告
-    print("\n" + "="*60)
-    print("最终报告（Markdown格式）")
-    print("="*60 + "\n")
-    print(report)
-    print("\n" + "="*60 + "\n")
+    # 根据配置决定是否显示最终报告
+    if config.PRINT_FINAL_REPORT:
+        print("\n" + "="*60)
+        print("📄 最终报告内容")
+        print("="*60 + "\n")
+        print(report)
+        print("\n" + "="*60 + "\n")
+    else:
+        print("\n✅ 报告生成完成（已跳过控制台打印，避免刷屏）")
     
     # 自动保存并打开报告
-    print("正在保存报告...")
+    print("\n💾 正在保存报告...")
     system.save_report(report, auto_open=True, topic=requirement, 
                       analysis_result=analysis_result, search_keywords=search_keywords)
 

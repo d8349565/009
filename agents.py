@@ -79,15 +79,20 @@ class BaseAgent:
             # 显示使用的提供商和模型
             provider = self.llm_manager.get_provider(self.provider_name)
             if not provider:
-                print(f"  [{self.role}] 警告: 提供商 '{self.provider_name}' 不可用，回退到DeepSeek")
+                if config.LOG_LEVEL == 'verbose':
+                    print(f"  [{self.role}] 警告: 提供商 '{self.provider_name}' 不可用，回退到DeepSeek")
                 self.provider_name = "deepseek"
                 provider = self.llm_manager.get_provider("deepseek")
             
             model_to_use = self.model_name or provider.get_model(self.use_reasoner)
             
-            if self.use_reasoner:
-                print(f"  [{self.role}] 使用思考模式进行深度分析...")
-            print(f"  [{self.role}] 提供商: {self.provider_name.upper()}, 模型: {model_to_use}")
+            # 根据日志级别决定输出详细程度
+            if config.LOG_LEVEL == 'verbose':
+                if self.use_reasoner:
+                    print(f"  [{self.role}] 使用思考模式进行深度分析...")
+                print(f"  [{self.role}] 提供商: {self.provider_name.upper()}, 模型: {model_to_use}")
+            elif config.LOG_LEVEL == 'normal' and self.use_reasoner:
+                print(f"  💡 {self.role}使用推理模式分析中...")
             
             # 记录API调用开始时间
             api_start_time = time.time()
@@ -104,18 +109,19 @@ class BaseAgent:
             # 处理返回结果（可能是字符串或元组）
             if isinstance(result, tuple):
                 content, reasoning = result
-                if reasoning:
+                if reasoning and config.LOG_LEVEL == 'verbose':
                     print(f"  [思考过程] {reasoning[:200]}..." if len(reasoning) > 200 else f"  [思考过程] {reasoning}")
             else:
                 content = result
             
-            # 记录API调用耗时
+            # 记录API调用耗时（仅verbose模式）
             api_duration = time.time() - api_start_time
-            print(f"  [{self.role}] API调用耗时: {api_duration:.2f}秒")
+            if config.LOG_LEVEL == 'verbose':
+                print(f"  [{self.role}] API调用耗时: {api_duration:.2f}秒")
             
             return content
         except Exception as e:
-            print(f"[错误] {self.role} 调用API失败: {e}")
+            print(f"❌ [{self.role}] API调用失败: {e}")
             return ""
 
 

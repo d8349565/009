@@ -72,8 +72,9 @@ class ZhipuProvider(LLMProvider):
     
     def __init__(self, api_key: str):
         base_url = os.getenv("ZHIPU_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")
-        super().__init__(api_key, base_url, "glm-4-flash")
-        self.advanced_model = "glm-4.7"  # 高级模型
+        default_model = os.getenv("ZHIPU_DEFAULT_MODEL", "glm-4.7")  # 从环境变量读取，默认 glm-4.7
+        super().__init__(api_key, base_url, default_model)
+        self.advanced_model = os.getenv("ZHIPU_ADVANCED_MODEL", "glm-4-plus")  # 高级模型
     
     def get_model(self, use_reasoner: bool = False) -> str:
         """获取模型名称（use_reasoner时使用plus版本）"""
