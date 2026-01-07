@@ -4,18 +4,13 @@
     "models": [
       {
         "id": "deepseek-chat",
-        "name": "DeepSeek Chat (基础模型)",
-        "description": "快速响应，适合一般任务"
-      },
-      {
-        "id": "deepseek-reasoner",
-        "name": "DeepSeek Reasoner (推理模型)",
-        "description": "深度推理，适合复杂分析"
+        "name": "deepseek-chat",
+        "description": "deepseek-chat"
       }
     ]
   },
   "zhipu": {
-    "name": "智谱AI (Zhipu)",
+    "name": "智谱AI",
     "models": [
       {
         "id": "glm-4.7",

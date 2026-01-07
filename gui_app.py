@@ -1552,6 +1552,10 @@ class App(wx.App):
 
 def main():
     """主函数"""
+    # 确保工作目录固定在脚本所在位置，避免相对路径读取失败
+    script_dir = Path(__file__).resolve().parent
+    os.chdir(script_dir)
+    
     app = App()
     app.MainLoop()
 

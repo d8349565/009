@@ -101,7 +101,7 @@ REQUIREMENT_ANALYZER_PROMPT = """你是一名专业的信息需求分析与检�
     "key_concepts": ["概念1", "概念2"],
     "time_range": "时间范围（必须明确具体年份）",
     "specific_years": ["2020", "2021", "2022", "2023", "2024"],
-    "search_keywords": ["关键词1", "关键词2", "关键词3"],
+    "search_keywords": ["关键词1", "关键词2", "关键词3", "关键词n"], # 最多5个 
     "search_strategy": "搜索策略建议"
 }"""
 
