@@ -956,7 +956,7 @@ class ConfigPanel(wx.Panel):
             self.length_spin.SetValue(config.CONTENT_EXTRACT_LENGTH)
             
             # 加载Agent配置
-            agent_config = get_active_agent_config()
+            agent_config = get_active_agent_config(pipeline_config=config.PIPELINE_CONFIG)
             for agent_key, controls in self.agent_configs.items():
                 if agent_key in agent_config:
                     cfg = agent_config[agent_key]

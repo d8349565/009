@@ -7,6 +7,7 @@ from search_engine import SearchEngine
 from performance_timer import PerformanceTimer
 from report_metadata import ReportMetadata, ReportIndex, extract_summary_from_markdown
 from document_parser import DocumentParser
+from pipeline_factory import PipelineFactory
 import config
 import time
 import json
@@ -20,7 +21,7 @@ def print_model_configuration():
     try:
         from agent_config import get_active_agent_config, AGENT_CONFIG_PRESET
         
-        config_data = get_active_agent_config()
+        config_data = get_active_agent_config(pipeline_config=config.PIPELINE_CONFIG)
         
         print("\n" + "="*80)
         print(f"🤖 当前使用的AI模型配置（方案: {AGENT_CONFIG_PRESET.upper()}）")
@@ -97,14 +98,32 @@ class ResearchAgentSystem:
         # 初始化系统时间并注入各Agent
         self.system_datetime = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
+        # 初始化组件工厂（组合配置驱动）
+        self.factory = PipelineFactory()
+
         # 初始化各个Agent（传入系统时间）
-        self.requirement_analyzer = RequirementAnalyzer(system_datetime=self.system_datetime)
-        self.information_collector = InformationCollector(system_datetime=self.system_datetime)
-        self.report_writer = ReportWriter(system_datetime=self.system_datetime)
-        self.quality_judge = QualityJudge(system_datetime=self.system_datetime)
+        self.requirement_analyzer = self.factory.create_agent(
+            "requirement_analyzer",
+            system_datetime=self.system_datetime
+        ) or RequirementAnalyzer(system_datetime=self.system_datetime)
+        self.information_collector = self.factory.create_agent(
+            "information_collector",
+            system_datetime=self.system_datetime
+        ) or InformationCollector(system_datetime=self.system_datetime)
+        self.report_writer = self.factory.create_agent(
+            "report_writer",
+            system_datetime=self.system_datetime
+        ) or ReportWriter(system_datetime=self.system_datetime)
+        self.quality_judge = self.factory.create_agent(
+            "quality_judge",
+            system_datetime=self.system_datetime
+        ) or QualityJudge(system_datetime=self.system_datetime)
 
         # 初始化搜索引擎（传入用户选择的引擎类型）
-        self.search_engine = SearchEngine(engine_type=search_engine_type)
+        self.search_engine = self.factory.create_tool(
+            "search_engine",
+            engine_type=search_engine_type
+        ) or SearchEngine(engine_type=search_engine_type)
         
         # 初始化报告索引系统
         self.report_index = ReportIndex()

@@ -1,0 +1,90 @@
+{
+  "agents": {
+    "requirement_analyzer": {
+      "class": "RequirementAnalyzer",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "prompt": "REQUIREMENT_ANALYZER_PROMPT",
+      "tools": ["search"],
+      "tags": ["analysis", "planning"]
+    },
+    "information_collector": {
+      "class": "InformationCollector",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "prompt": "INFORMATION_COLLECTOR_PROMPT",
+      "tools": ["search", "parse"],
+      "tags": ["collection", "evaluation"]
+    },
+    "report_writer": {
+      "class": "ReportWriter",
+      "provider": "deepseek",
+      "model": "deepseek-reasoner",
+      "prompt": "REPORT_WRITER_PROMPT",
+      "tools": ["index"],
+      "tags": ["writing", "synthesis"]
+    },
+    "quality_judge": {
+      "class": "QualityJudge",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "prompt": "QUALITY_JUDGE_PROMPT",
+      "tools": ["index"],
+      "tags": ["evaluation"]
+    },
+    "comprehensive_report_writer": {
+      "class": "ComprehensiveReportWriter",
+      "provider": "deepseek",
+      "model": "deepseek-reasoner",
+      "prompt": "COMPREHENSIVE_REPORT_WRITER_PROMPT",
+      "tools": ["index"],
+      "tags": ["writing", "synthesis"]
+    }
+  },
+  "tools": {
+    "search_engine": {
+      "class": "SearchEngine",
+      "engine_type": "searxng",
+      "params": {
+        "timeout": 10,
+        "max_results": 30
+      }
+    },
+    "document_parser": {
+      "class": "DocumentParser",
+      "params": {
+        "max_content_length": 2000
+      }
+    },
+    "report_index": {
+      "class": "ReportIndex"
+    }
+  },
+  "pipeline": {
+    "steps": [
+      {
+        "id": "requirement_analyzer",
+        "type": "agent",
+        "ref": "requirement_analyzer"
+      },
+      {
+        "id": "search",
+        "type": "tool",
+        "ref": "search_engine",
+        "depends_on": ["requirement_analyzer"]
+      },
+      {
+        "id": "information_collector",
+        "type": "agent",
+        "ref": "information_collector",
+        "depends_on": ["search"]
+      },
+      {
+        "id": "report_writer",
+        "type": "agent",
+        "ref": "report_writer",
+        "depends_on": ["information_collector"]
+      }
+    ]
+  }
+}

@@ -8,6 +8,7 @@
 
 *   **🤖 智能多 Agent 协作**: 需求分析、信息收集、报告撰写、质量评审、综合分析 5 个专业 Agent 分工协作。
 *   **🧠 多 LLM 供应商支持**: 灵活配置 DeepSeek (高性价比)、智谱 GLM (中文优化)、OpenRouter (聚合模型) 等不同供应商，实现成本与质量的最佳平衡。
+*   **🧩 组合式 Pipeline 配置**: 在 `config/pipeline.json` 中统一定义 Agent、工具与步骤顺序，实现“换配置即换方案”。
 *   **🖥️ 现代化 GUI 界面**: 基于 wxPython 的桌面图形界面，操作直观，实时显示任务日志和进度。
 *   **📚 综合报告生成**: 支持整合多个历史报告，进行跨文档的数据交叉验证、矛盾识别和新洞察发现。
 *   **🔍 灵活搜索模式**:
@@ -81,6 +82,9 @@ python gui_app.py
 ├── search_engine.py           # 搜索引擎封装 (SearXNG, Tavily)
 ├── llm_providers.py           # 多 LLM 供应商适配层
 ├── document_parser.py         # 文档解析器
+├── pipeline_factory.py        # 组合配置工厂（按 pipeline 实例化组件）
+├── config/
+│   └── pipeline.json           # 组合配置（agents/tools/pipeline）
 ├── reports/                   # 报告生成目录 (.md, .json)
 ├── config.py                  # 配置加载
 └── model_config.json          # 模型预设配置

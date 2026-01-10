@@ -7,9 +7,10 @@ Agent模型配置文件
 - model: 具体模型名称（None表示使用该供应商的默认模型）
 - use_reasoner: 是否使用推理模型（影响模型选择）
 
-💡 两种配置方式：
+💡 三种配置方式：
 1. 【推荐】直接修改本文件的预设方案（第30-40行）
-2. 在 .env 中配置环境变量（格式见下方说明）
+2. 在 config/pipeline.json 中定义 agents 组合配置（可与预设方案叠加）
+3. 在 .env 中配置环境变量（格式见下方说明）
 
 🔧 .env 配置格式：
    # 格式1: 只指定供应商（使用默认模型）
@@ -19,11 +20,17 @@ Agent模型配置文件
    REQUIREMENT_ANALYZER_PROVIDER=glm
    REQUIREMENT_ANALYZER_MODEL=glm-4.7  # 新增！可以指定具体模型
 
-⚙️ 配置优先级：
+⚙️ 配置优先级（从高到低）：
    .env中的 *_MODEL      （最高优先级）
    .env中的 *_PROVIDER
+   pipeline 配置中的 agents 定义（组合配置）
    agent_config.py预设方案
    默认值（兜底）
+
+🧩 联动说明：
+   - pipeline 配置可指定 agent 的 class/provider/model/use_reasoner
+   - provider/model 会与本文件预设方案合并，最终仍可被 .env 覆盖
+   - 未配置的字段继续沿用预设方案，保持兼容
 """
 import os
 
@@ -199,20 +206,24 @@ AGENT_CONFIG_CUSTOM = {
 # 获取当前激活的配置
 # ============================================================
 
-def get_active_agent_config():
+def get_active_agent_config(pipeline_config: dict = None):
     """
     获取当前激活的Agent配置
     
     优先级（从高到低）：
     1. 环境变量中的具体模型 (*_MODEL)  
     2. 环境变量中的供应商 (*_PROVIDER)
-    3. 预设方案 (AGENT_CONFIG_PRESET)
-    4. 默认配置
+    3. pipeline配置中的 agents 定义（组合配置）
+    4. 预设方案 (AGENT_CONFIG_PRESET)
+    5. 默认配置
     
     支持的环境变量格式：
     - REQUIREMENT_ANALYZER_PROVIDER=glm        # 只指定供应商
     - REQUIREMENT_ANALYZER_MODEL=glm-4.7    # 指定具体模型（可选）
     
+    Args:
+        pipeline_config: 组合配置内容（可选）
+
     Returns:
         dict: Agent配置字典
     """
@@ -225,10 +236,19 @@ def get_active_agent_config():
     }
     
     active_config = config_map.get(AGENT_CONFIG_PRESET, AGENT_CONFIG_ECONOMY)
+    pipeline_agents = (pipeline_config or {}).get("agents", {}) or {}
     
     # 环境变量覆盖（优先级最高）
     final_config = {}
     for agent_key, agent_settings in active_config.items():
+        pipeline_settings = pipeline_agents.get(agent_key, {}) or {}
+        merged_settings = agent_settings.copy()
+        for field in ("provider", "model", "use_reasoner", "description"):
+            if field in pipeline_settings:
+                merged_settings[field] = pipeline_settings[field]
+        for field in ("class", "prompt", "tools", "tags"):
+            if field in pipeline_settings:
+                merged_settings[field] = pipeline_settings[field]
         # 环境变量名称（转换为大写并加前缀）
         provider_env_var = f"{agent_key.upper()}_PROVIDER"
         model_env_var = f"{agent_key.upper()}_MODEL"
@@ -239,8 +259,8 @@ def get_active_agent_config():
         
         if env_provider or env_model:
             # 使用环境变量配置（优先级最高）
-            final_provider = env_provider or agent_settings.get("provider")
-            final_model = env_model or agent_settings.get("model")
+            final_provider = env_provider or merged_settings.get("provider")
+            final_model = env_model or merged_settings.get("model")
             
             source_desc = []
             if env_provider:
@@ -253,12 +273,15 @@ def get_active_agent_config():
             final_config[agent_key] = {
                 "provider": final_provider,
                 "model": final_model,
-                "use_reasoner": agent_settings.get("use_reasoner", False),
-                "description": f"{agent_settings.get('description', '')}{source_info}"
+                "use_reasoner": merged_settings.get("use_reasoner", False),
+                "description": f"{merged_settings.get('description', '')}{source_info}"
             }
+            for field in ("class", "prompt", "tools", "tags"):
+                if field in merged_settings:
+                    final_config[agent_key][field] = merged_settings[field]
         else:
             # 使用预设配置
-            final_config[agent_key] = agent_settings
+            final_config[agent_key] = merged_settings
     
     return final_config
 

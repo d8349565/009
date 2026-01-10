@@ -1,11 +1,51 @@
 """
 配置文件
 """
+import json
 import os
 from dotenv import load_dotenv
 
 # 加载环境变量
 load_dotenv()
+
+# ============================================================
+# 组合配置（pipeline）
+# ============================================================
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PIPELINE_CONFIG_PATH = os.getenv(
+    "PIPELINE_CONFIG_PATH",
+    os.path.join(BASE_DIR, "config", "pipeline.json")
+)
+
+
+def load_pipeline_config() -> dict:
+    """加载组合配置文件（pipeline.json / pipeline.yaml）"""
+    if not os.path.exists(PIPELINE_CONFIG_PATH):
+        return {}
+
+    if PIPELINE_CONFIG_PATH.endswith(".json"):
+        try:
+            with open(PIPELINE_CONFIG_PATH, "r", encoding="utf-8") as file:
+                return json.load(file)
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    if PIPELINE_CONFIG_PATH.endswith((".yaml", ".yml")):
+        try:
+            import yaml
+        except ImportError:
+            return {}
+        try:
+            with open(PIPELINE_CONFIG_PATH, "r", encoding="utf-8") as file:
+                return yaml.safe_load(file) or {}
+        except OSError:
+            return {}
+
+    return {}
+
+
+PIPELINE_CONFIG = load_pipeline_config()
 
 # ============================================================
 # LLM供应商配置
@@ -43,7 +83,7 @@ OPENROUTER_REASONER_MODEL = os.getenv("OPENROUTER_REASONER_MODEL", "openai/o1-pr
 # 尝试从 agent_config.py 加载配置
 try:
     from agent_config import get_active_agent_config
-    _agent_config = get_active_agent_config()
+    _agent_config = get_active_agent_config(pipeline_config=PIPELINE_CONFIG)
     
     # 需求分析师
     REQUIREMENT_ANALYZER_PROVIDER = os.getenv(
@@ -93,7 +133,10 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 TAVILY_ENABLED = os.getenv("TAVILY_ENABLED", "false").lower() == "true"
 
 # 搜索引擎选择：'searxng', 'tavily'
-SEARCH_ENGINE_TYPE = os.getenv("SEARCH_ENGINE_TYPE", "searxng")
+SEARCH_ENGINE_TYPE = os.getenv(
+    "SEARCH_ENGINE_TYPE",
+    (PIPELINE_CONFIG.get("tools", {}) or {}).get("search_engine", {}).get("engine_type", "searxng")
+)
 
 # 搜索模式配置
 # SEARCH_MODE: 'quick' (快速搜索模式，一次搜索直接生成报告) 或 'full' (完整搜索模式，多轮迭代优化)

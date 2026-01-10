@@ -6,7 +6,7 @@
 
 ## 🏗️ 1. 系统架构设计
 
-本项目采用 **多 Agent 流水线 (Multi-Agent Pipeline)** 架构，通过分工明确的智能体协作完成复杂任务。
+本项目采用 **多 Agent 流水线 (Multi-Agent Pipeline)** 架构，通过分工明确的智能体协作完成复杂任务，并通过组合配置文件统一管理 Agent、工具与步骤编排。
 
 ### 1.1 核心工作流
 ```mermaid
@@ -31,6 +31,7 @@ graph LR
 *   **工具层**:
     *   `search_engine.py`: 适配 Tavily (云端) 和 SearXNG (自建) 两种搜索后端。
     *   `document_parser.py`: 支持 Markdown, PDF, Word 的统一解析接口。
+*   **组合配置层 (`config/pipeline.json`, `pipeline_factory.py`)**: 以配置驱动方式定义 agents/tools/pipeline，并在工厂中统一实例化，支持快速切换方案。
 *   **表现层 (`gui_app.py`)**: 采用 wxPython 构建，通过后台线程 (`threading`) + 消息队列 (`wx.CallAfter`) 实现了 UI 与业务逻辑的解耦，保证界面响应流畅。
 
 ---
