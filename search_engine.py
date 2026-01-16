@@ -3,9 +3,12 @@
 """
 import requests
 from bs4 import BeautifulSoup
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from typing import List, Dict, Any
 import time
 import config
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # 尝试导入Tavily
@@ -35,11 +38,27 @@ class SearchEngine:
         self.max_results = config.MAX_SEARCH_RESULTS
         self.priority_sources_enabled = config.PRIORITY_SOURCES.get("enabled", False)
         self.headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+            'Connection': 'keep-alive',
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache',
+            'Upgrade-Insecure-Requests': '1'
         }
         # 统计信息：每次向单个关键词发起的搜索调用计数，以及每个关键词的日志
         self._total_search_calls = 0
         self._keyword_logs: List[Dict[str, Any]] = []
+        # Cache fetched pages to avoid duplicate network calls across keywords.
+        self._content_cache: Dict[str, str] = {}
+        self._content_cache_lock = threading.Lock()
+        self._content_max_length = max(0, config.CONTENT_EXTRACT_LENGTH)
+        self._retry_total = max(0, config.FETCH_RETRY_TOTAL)
+        self._backoff_factor = max(0.0, config.FETCH_BACKOFF_FACTOR)
+        self._fallback_jina = config.FETCH_FALLBACK_JINA
+        self.session = requests.Session()
+        self.session.headers.update(self.headers)
+        self._setup_session()
         
         # 初始化Tavily客户端（如果选择了Tavily）
         self.tavily_client = None
@@ -73,6 +92,49 @@ class SearchEngine:
         else:
             print("✗ 未启用优先搜索源")
     
+    def _setup_session(self):
+        """Configure retry behavior for HTTP requests."""
+        if self._retry_total <= 0:
+            return
+        status_forcelist = {429, 500, 502, 503, 504}
+        try:
+            retry = Retry(
+                total=self._retry_total,
+                backoff_factor=self._backoff_factor,
+                status_forcelist=status_forcelist,
+                allowed_methods=frozenset(["GET"])
+            )
+        except TypeError:
+            retry = Retry(
+                total=self._retry_total,
+                backoff_factor=self._backoff_factor,
+                status_forcelist=status_forcelist,
+                method_whitelist=frozenset(["GET"])
+            )
+        adapter = HTTPAdapter(max_retries=retry)
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
+
+    def _fetch_via_jina(self, url: str) -> str:
+        """Fetch plain text via jina.ai reader as a fallback."""
+        if not url:
+            return ""
+        reader_url = f"https://r.jina.ai/http://{url}"
+        try:
+            response = self.session.get(
+                reader_url,
+                timeout=self.timeout,
+                headers={'Accept': 'text/plain'}
+            )
+            response.raise_for_status()
+            content = response.text.strip()
+            if self._content_max_length and len(content) > self._content_max_length:
+                content = content[:self._content_max_length]
+            return content
+        except Exception as e:
+            print(f"[Warning] reader fetch failed ({url}): {e}")
+            return ""
+
     def search(self, keywords: List[str]) -> List[Dict[str, str]]:
         """
         执行并行搜索（不拆解关键词，直接使用完整关键词）
@@ -269,11 +331,17 @@ class SearchEngine:
             )
             
             results = []
+            seen_urls = set()
             # 解析Tavily返回的结果
             for item in response.get('results', []):
+                url = item.get('url', '')
+                if url and url in seen_urls:
+                    continue
+                if url:
+                    seen_urls.add(url)
                 result = {
                     'title': item.get('title', '无标题'),
-                    'url': item.get('url', ''),
+                    'url': url,
                     'content': item.get('content', '') or item.get('snippet', '')
                 }
                 
@@ -311,7 +379,7 @@ class SearchEngine:
             if config.SEARXNG_API_KEY:
                 headers['Authorization'] = f'Bearer {config.SEARXNG_API_KEY}'
             
-            response = requests.get(
+            response = self.session.get(
                 url, 
                 params=params, 
                 headers=headers, 
@@ -321,12 +389,18 @@ class SearchEngine:
             
             data = response.json()
             results = []
+            seen_urls = set()
             
             # 解析SearXNG返回的结果，使用配置中的最大结果数
             for item in data.get('results', [])[:self.max_results]:
+                url = item.get('url', '')
+                if url and url in seen_urls:
+                    continue
+                if url:
+                    seen_urls.add(url)
                 result = {
                     'title': item.get('title', '无标题'),
-                    'url': item.get('url', ''),
+                    'url': url,
                     'content': item.get('content', '') or item.get('snippet', ''),
                     'score': item.get('score', 0)  # 添加SearXNG的相关性评分
                 }
@@ -350,32 +424,66 @@ class SearchEngine:
     
     def fetch_content(self, url: str) -> str:
         """
-        获取网页内容
+        Fetch page content for a URL.
         """
+        if not url:
+            return ""
+        with self._content_cache_lock:
+            cached = self._content_cache.get(url)
+        if cached is not None:
+            return cached
+
+        content = ""
         try:
-            response = requests.get(url, headers=self.headers, timeout=self.timeout)
+            response = self.session.get(url, headers=self.headers, timeout=self.timeout)
+            if response.status_code in (403, 429):
+                if self._fallback_jina:
+                    content = self._fetch_via_jina(url)
+                    if content:
+                        with self._content_cache_lock:
+                            self._content_cache[url] = content
+                        return content
+                print(f"[Warning] Fetch failed ({url}): {response.status_code}")
+                return ""
             response.raise_for_status()
-            
+
             soup = BeautifulSoup(response.content, 'html.parser')
-            
-            # 移除脚本和样式
+
+            # Remove scripts and styles.
             for script in soup(["script", "style"]):
                 script.decompose()
-            
-            # 获取文本
-            text = soup.get_text()
-            
-            # 清理文本
-            lines = (line.strip() for line in text.splitlines())
+
+            # Extract text.
+            text_content = soup.get_text()
+
+            # Normalize whitespace.
+            lines = (line.strip() for line in text_content.splitlines())
             chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-            text = '\n'.join(chunk for chunk in chunks if chunk)
-            
-            return text # 限制长度
-        
+            content = '\n'.join(chunk for chunk in chunks if chunk)
+            if self._content_max_length and len(content) > self._content_max_length:
+                content = content[:self._content_max_length]
+
+        except requests.exceptions.SSLError as e:
+            if self._fallback_jina:
+                content = self._fetch_via_jina(url)
+            else:
+                print(f"[Warning] Fetch failed ({url}): {e}")
+                return ""
+        except requests.exceptions.RequestException as e:
+            if self._fallback_jina:
+                content = self._fetch_via_jina(url)
+            else:
+                print(f"[Warning] Fetch failed ({url}): {e}")
+                return ""
         except Exception as e:
-            print(f"[警告] 获取网页内容失败 ({url}): {e}")
+            print(f"[Warning] Fetch failed ({url}): {e}")
             return ""
-    
+
+        if content:
+            with self._content_cache_lock:
+                self._content_cache[url] = content
+        return content
+
     def create_summary(self, results: List[Dict[str, str]]) -> str:
         """创建搜索结果概要"""
         summary = f"共找到 {len(results)} 条相关信息\n\n"
