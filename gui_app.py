@@ -65,6 +65,92 @@ class LogRedirector:
             self._line_buffer = ""
 
 
+LOG_ROUTER_OUT = None
+LOG_ROUTER_ERR = None
+
+class LogRouter:
+    """Route stdout/stderr to per-thread log widgets."""
+    def __init__(self, fallback, log_type='stdout'):
+        self._fallback = fallback
+        self.log_type = log_type
+        self._targets = {}
+        self._buffers = {}
+        self._lock = threading.Lock()
+
+    def register(self, thread_id, widget):
+        if widget is None:
+            return
+        with self._lock:
+            self._targets[thread_id] = widget
+            self._buffers.setdefault(thread_id, '')
+
+    def unregister(self, thread_id):
+        with self._lock:
+            self._targets.pop(thread_id, None)
+            self._buffers.pop(thread_id, None)
+
+    def write(self, message):
+        if not message:
+            return
+        thread_id = threading.get_ident()
+        with self._lock:
+            widget = self._targets.get(thread_id)
+            if widget is None and len(self._targets) == 1:
+                widget = next(iter(self._targets.values()))
+            if widget is None:
+                fallback = self._fallback
+            else:
+                buffer = self._buffers.get(thread_id, '')
+                buffer += message
+                if '\n' in buffer:
+                    lines = buffer.split('\n')
+                    self._buffers[thread_id] = lines[-1]
+                    for line in lines[:-1]:
+                        if line.strip():
+                            wx.CallAfter(self._append_text, widget, line + '\n')
+                else:
+                    self._buffers[thread_id] = buffer
+                fallback = None
+        if fallback:
+            try:
+                fallback.write(message)
+                fallback.flush()
+            except Exception:
+                pass
+
+    def flush(self):
+        thread_id = threading.get_ident()
+        with self._lock:
+            widget = self._targets.get(thread_id)
+            if widget:
+                buffer = self._buffers.get(thread_id, '')
+                if buffer.strip():
+                    wx.CallAfter(self._append_text, widget, buffer + '\n')
+                    self._buffers[thread_id] = ''
+        if self._fallback:
+            try:
+                self._fallback.flush()
+            except Exception:
+                pass
+
+    @staticmethod
+    def _append_text(widget, message):
+        if widget:
+            try:
+                widget.AppendText(message)
+                widget.ShowPosition(widget.GetLastPosition())
+            except Exception:
+                pass
+
+def init_log_routers():
+    global LOG_ROUTER_OUT, LOG_ROUTER_ERR
+    if LOG_ROUTER_OUT is None:
+        LOG_ROUTER_OUT = LogRouter(sys.__stdout__, 'stdout')
+        LOG_ROUTER_ERR = LogRouter(sys.__stderr__, 'stderr')
+        sys.stdout = LOG_ROUTER_OUT
+        sys.stderr = LOG_ROUTER_ERR
+
+
 class ResearchWorker(threading.Thread):
     """后台工作线程 - 执行报告生成任务"""
     
@@ -80,14 +166,13 @@ class ResearchWorker(threading.Thread):
     def run(self):
         """执行报告生成"""
         try:
-            # 重定向stdout到当前任务的GUI日志窗口
-            old_stdout = sys.stdout
-            old_stderr = sys.stderr
-            
-            # 确保重定向到正确的log_text控件
+            # Register per-thread log target to avoid cross-task log mixing.
+            thread_id = threading.get_ident()
             log_widget = self.parent.log_text
-            sys.stdout = LogRedirector(log_widget)
-            sys.stderr = LogRedirector(log_widget, 'stderr')
+            if LOG_ROUTER_OUT:
+                LOG_ROUTER_OUT.register(thread_id, log_widget)
+            if LOG_ROUTER_ERR:
+                LOG_ROUTER_ERR.register(thread_id, log_widget)
             
             # 发送开始信号
             wx.CallAfter(self.parent.on_task_start)
@@ -128,17 +213,19 @@ class ResearchWorker(threading.Thread):
             print(f"✅ 任务 #{self.task_id if self.task_id else ''} 完成")
             print(f"{'='*60}\n")
             
-            # 恢复stdout
-            sys.stdout = old_stdout
-            sys.stderr = old_stderr
+            if LOG_ROUTER_OUT:
+                LOG_ROUTER_OUT.unregister(threading.get_ident())
+            if LOG_ROUTER_ERR:
+                LOG_ROUTER_ERR.unregister(threading.get_ident())
             
             # 发送完成信号
             wx.CallAfter(self.parent.on_task_complete, report)
             
         except Exception as e:
-            # 恢复stdout
-            sys.stdout = old_stdout
-            sys.stderr = old_stderr
+            if LOG_ROUTER_OUT:
+                LOG_ROUTER_OUT.unregister(threading.get_ident())
+            if LOG_ROUTER_ERR:
+                LOG_ROUTER_ERR.unregister(threading.get_ident())
             wx.CallAfter(self.parent.on_task_error, str(e))
             
     def stop(self):
@@ -159,14 +246,13 @@ class ComprehensiveWorker(threading.Thread):
     def run(self):
         """执行综合报告生成"""
         try:
-            # 重定向stdout到GUI日志窗口
-            old_stdout = sys.stdout
-            old_stderr = sys.stderr
-            
-            # 确保重定向到综合报告面板的log_text控件
+            # Register per-thread log target to avoid cross-task log mixing.
+            thread_id = threading.get_ident()
             log_widget = self.parent.log_text
-            sys.stdout = LogRedirector(log_widget)
-            sys.stderr = LogRedirector(log_widget, 'stderr')
+            if LOG_ROUTER_OUT:
+                LOG_ROUTER_OUT.register(thread_id, log_widget)
+            if LOG_ROUTER_ERR:
+                LOG_ROUTER_ERR.register(thread_id, log_widget)
             
             # 发送开始信号
             wx.CallAfter(self.parent.on_task_start)
@@ -267,17 +353,19 @@ class ComprehensiveWorker(threading.Thread):
             # 打开报告
             os.startfile(filepath)
             
-            # 恢复stdout
-            sys.stdout = old_stdout
-            sys.stderr = old_stderr
+            if LOG_ROUTER_OUT:
+                LOG_ROUTER_OUT.unregister(threading.get_ident())
+            if LOG_ROUTER_ERR:
+                LOG_ROUTER_ERR.unregister(threading.get_ident())
             
             # 发送完成信号
             wx.CallAfter(self.parent.on_task_complete, comprehensive_report)
             
         except Exception as e:
-            # 恢复stdout
-            sys.stdout = old_stdout
-            sys.stderr = old_stderr
+            if LOG_ROUTER_OUT:
+                LOG_ROUTER_OUT.unregister(threading.get_ident())
+            if LOG_ROUTER_ERR:
+                LOG_ROUTER_ERR.unregister(threading.get_ident())
             wx.CallAfter(self.parent.on_task_error, str(e))
 class TaskPanel(wx.Panel):
     """单个任务面板"""
@@ -1545,6 +1633,7 @@ class App(wx.App):
     """应用程序类"""
     
     def OnInit(self):
+        init_log_routers()
         self.frame = MainFrame()
         self.frame.Show()
         return True
