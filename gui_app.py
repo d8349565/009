@@ -809,6 +809,7 @@ class ConfigPanel(wx.Panel):
                 'deepseek/deepseek-chat',
                 'anthropic/claude-3-opus',
                 'xiaomi/mimo-v2-flash:free',
+                'z-ai/glm-4.5-air:free',
                 'custom'
             ]
         }

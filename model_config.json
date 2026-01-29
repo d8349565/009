@@ -23,9 +23,9 @@
     "name": "OpenRouter (聚合)",
     "models": [
       {
-        "id": "xiaomi/mimo-v2-flash:free",
-        "name": "Mimo v2 Flash (免费)",
-        "description": "小米免费模型"
+        "id": "z-ai/glm-4.5-air:free",
+        "name": "免费",
+        "description": "免费模型"
       }
     ]
   },
