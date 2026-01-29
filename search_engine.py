@@ -55,7 +55,6 @@ class SearchEngine:
         self._content_max_length = max(0, config.CONTENT_EXTRACT_LENGTH)
         self._retry_total = max(0, config.FETCH_RETRY_TOTAL)
         self._backoff_factor = max(0.0, config.FETCH_BACKOFF_FACTOR)
-        self._fallback_jina = config.FETCH_FALLBACK_JINA
         self.session = requests.Session()
         self.session.headers.update(self.headers)
         self._setup_session()
@@ -114,26 +113,6 @@ class SearchEngine:
         adapter = HTTPAdapter(max_retries=retry)
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
-
-    def _fetch_via_jina(self, url: str) -> str:
-        """Fetch plain text via jina.ai reader as a fallback."""
-        if not url:
-            return ""
-        reader_url = f"https://r.jina.ai/http://{url}"
-        try:
-            response = self.session.get(
-                reader_url,
-                timeout=self.timeout,
-                headers={'Accept': 'text/plain'}
-            )
-            response.raise_for_status()
-            content = response.text.strip()
-            if self._content_max_length and len(content) > self._content_max_length:
-                content = content[:self._content_max_length]
-            return content
-        except Exception as e:
-            print(f"[Warning] reader fetch failed ({url}): {e}")
-            return ""
 
     def search(self, keywords: List[str]) -> List[Dict[str, str]]:
         """
@@ -433,19 +412,33 @@ class SearchEngine:
         if cached is not None:
             return cached
 
+        try:
+            from urllib.parse import urlparse
+            hostname = (urlparse(url).hostname or "").lower()
+            if hostname.endswith("baike.baidu.com") or hostname.endswith("zhihu.com"):
+                return ""
+        except Exception:
+            pass
+
         content = ""
         try:
             response = self.session.get(url, headers=self.headers, timeout=self.timeout)
             if response.status_code in (403, 429):
-                if self._fallback_jina:
-                    content = self._fetch_via_jina(url)
-                    if content:
-                        with self._content_cache_lock:
-                            self._content_cache[url] = content
-                        return content
                 print(f"[Warning] Fetch failed ({url}): {response.status_code}")
                 return ""
             response.raise_for_status()
+
+            content_type = (response.headers.get('Content-Type') or '').lower()
+            if 'application/pdf' in content_type or url.lower().endswith('.pdf'):
+                from document_parser import DocumentParser
+                result = DocumentParser.parse_pdf_from_bytes(response.content)
+                content = result.get('content', '')
+                if self._content_max_length and len(content) > self._content_max_length:
+                    content = content[:self._content_max_length]
+                if content:
+                    with self._content_cache_lock:
+                        self._content_cache[url] = content
+                return content
 
             soup = BeautifulSoup(response.content, 'html.parser')
 
@@ -464,17 +457,11 @@ class SearchEngine:
                 content = content[:self._content_max_length]
 
         except requests.exceptions.SSLError as e:
-            if self._fallback_jina:
-                content = self._fetch_via_jina(url)
-            else:
-                print(f"[Warning] Fetch failed ({url}): {e}")
-                return ""
+            print(f"[Warning] Fetch failed ({url}): {e}")
+            return ""
         except requests.exceptions.RequestException as e:
-            if self._fallback_jina:
-                content = self._fetch_via_jina(url)
-            else:
-                print(f"[Warning] Fetch failed ({url}): {e}")
-                return ""
+            print(f"[Warning] Fetch failed ({url}): {e}")
+            return ""
         except Exception as e:
             print(f"[Warning] Fetch failed ({url}): {e}")
             return ""

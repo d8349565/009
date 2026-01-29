@@ -97,13 +97,17 @@ class BaseAgent:
             # 记录API调用开始时间
             api_start_time = time.time()
             
+            temperature_to_use = temperature
+            if self.provider_name.lower() == "openrouter" and (model_to_use or "").startswith("z-ai/"):
+                temperature_to_use = None
+
             # 调用LLM
             result = self.llm_manager.call_llm(
                 provider_name=self.provider_name,
                 messages=messages,
                 model=model_to_use,
                 use_reasoner=self.use_reasoner,
-                temperature=temperature
+                temperature=temperature_to_use
             )
             
             # 处理返回结果（可能是字符串或元组）

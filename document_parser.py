@@ -4,6 +4,7 @@
 """
 import os
 import re
+import io
 from typing import Dict, Optional
 
 
@@ -113,10 +114,17 @@ class DocumentParser:
     @staticmethod
     def _parse_pdf(file_path: str) -> Dict[str, str]:
         """解析PDF文档（需要pdfplumber或PyPDF2库）"""
+        with open(file_path, 'rb') as f:
+            pdf_bytes = f.read()
+        return DocumentParser.parse_pdf_from_bytes(pdf_bytes)
+
+    @staticmethod
+    def parse_pdf_from_bytes(pdf_bytes: bytes) -> Dict[str, str]:
+        """从字节流解析PDF文档内容"""
         try:
             import pdfplumber
             
-            with pdfplumber.open(file_path) as pdf:
+            with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                 # 提取所有文本
                 text_pages = []
                 for page in pdf.pages:
@@ -148,35 +156,32 @@ class DocumentParser:
             try:
                 import PyPDF2
                 
-                with open(file_path, 'rb') as f:
-                    reader = PyPDF2.PdfReader(f)
-                    
-                    # 提取所有页面文本
-                    text_pages = []
-                    for page in reader.pages:
-                        text = page.extract_text()
-                        if text:
-                            text_pages.append(text)
-                    
-                    content = "\n\n".join(text_pages)
-                    
-                    # 提取标题
-                    title = "未命名文档"
-                    if text_pages:
-                        first_lines = text_pages[0].split('\n')
-                        for line in first_lines:
-                            if line.strip():
-                                title = line.strip()
-                                break
-                    
-                    outline = "PDF文档大纲提取功能待完善"
-                    
-                    return {
-                        'title': title,
-                        'content': content,
-                        'outline': outline,
-                        'format': 'pdf'
-                    }
+                reader = PyPDF2.PdfReader(io.BytesIO(pdf_bytes))
+                
+                text_pages = []
+                for page in reader.pages:
+                    text = page.extract_text()
+                    if text:
+                        text_pages.append(text)
+                
+                content = "\n\n".join(text_pages)
+                
+                title = "未命名文档"
+                if text_pages:
+                    first_lines = text_pages[0].split('\n')
+                    for line in first_lines:
+                        if line.strip():
+                            title = line.strip()
+                            break
+                
+                outline = "PDF文档大纲提取功能待完善"
+                
+                return {
+                    'title': title,
+                    'content': content,
+                    'outline': outline,
+                    'format': 'pdf'
+                }
             except ImportError:
                 return {
                     'title': '需要安装依赖',
@@ -184,6 +189,20 @@ class DocumentParser:
                     'outline': '',
                     'format': 'pdf'
                 }
+            except Exception as e:
+                return {
+                    'title': '解析失败',
+                    'content': f'PDF解析出错: {str(e)}',
+                    'outline': '',
+                    'format': 'pdf'
+                }
+        except Exception as e:
+            return {
+                'title': '解析失败',
+                'content': f'PDF解析出错: {str(e)}',
+                'outline': '',
+                'format': 'pdf'
+            }
 
 
 def test_parser():

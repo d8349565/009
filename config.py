@@ -119,7 +119,6 @@ CONTENT_EXTRACT_LENGTH = int(os.getenv("CONTENT_EXTRACT_LENGTH", "2000"))
 # å†…å®¹æŠ“å–é…ç½®
 FETCH_RETRY_TOTAL = int(os.getenv("FETCH_RETRY_TOTAL", "2"))
 FETCH_BACKOFF_FACTOR = float(os.getenv("FETCH_BACKOFF_FACTOR", "0.5"))
-FETCH_FALLBACK_JINA = os.getenv("FETCH_FALLBACK_JINA", "true").lower() == "true"
 
 # 并发评估配置
 # 控制同时评估的批次数量，提高评估速度

@@ -19,7 +19,7 @@ class LLMProvider:
     def call(self, 
              messages: list,
              model: Optional[str] = None,
-             temperature: float = 0.7,
+             temperature: Optional[float] = 0.7,
              **kwargs) -> str:
         """
         调用LLM API
@@ -34,11 +34,16 @@ class LLMProvider:
             AI响应内容
         """
         try:
+            request_kwargs: Dict[str, Any] = {
+                "model": model or self.default_model,
+                "messages": messages,
+            }
+            if temperature is not None:
+                request_kwargs["temperature"] = temperature
+            if kwargs:
+                request_kwargs.update(kwargs)
             response = self.client.chat.completions.create(
-                model=model or self.default_model,
-                messages=messages,
-                temperature=temperature,
-                **kwargs
+                **request_kwargs
             )
             
             content = response.choices[0].message.content
@@ -155,7 +160,7 @@ class LLMProviderManager:
                  messages: list,
                  model: Optional[str] = None,
                  use_reasoner: bool = False,
-                 temperature: float = 0.7,
+                 temperature: Optional[float] = 0.7,
                  **kwargs) -> str:
         """
         统一的LLM调用接口
