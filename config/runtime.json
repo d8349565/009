@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "logging": {
+    "level": "normal",
+    "print_final_report": false
+  },
+  "search": {
+    "engine_type": "searxng",
+    "mode": "full",
+    "max_loop_count": 3,
+    "timeout": 10,
+    "max_results": 30,
+    "content_extract_length": 5000,
+    "max_concurrent_evaluations": 6,
+    "skip_evaluation": false,
+    "simplify_report_input": false,
+    "use_priority_sources": false,
+    "early_stop_on_satisfaction": true
+  },
+  "agents": {
+    "requirement_analyzer": {
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "use_reasoner": true,
+      "temperature": 0.3
+    },
+    "information_collector": {
+      "provider": "openrouter",
+      "model": "z-ai/glm-4.5-air:free",
+      "use_reasoner": false,
+      "temperature": 0.2
+    },
+    "report_writer": {
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "use_reasoner": true,
+      "temperature": 0.7
+    },
+    "quality_judge": {
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "use_reasoner": true,
+      "temperature": 0.7
+    },
+    "comprehensive_report_writer": {
+      "provider": "deepseek",
+      "model": "deepseek-chat",
+      "use_reasoner": true,
+      "temperature": 0.7
+    }
+  },
+  "providers": {
+    "deepseek": {
+      "type": "openai_compatible",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "base_url_env": "DEEPSEEK_BASE_URL",
+      "default_model": "deepseek-chat",
+      "reasoner_model": "deepseek-reasoner",
+      "capabilities": {
+        "supports_temperature": true
+      }
+    },
+    "zhipu": {
+      "type": "openai_compatible",
+      "api_key_env": "ZHIPU_API_KEY",
+      "base_url_env": "ZHIPU_BASE_URL",
+      "default_model_env": "ZHIPU_DEFAULT_MODEL",
+      "reasoner_model_env": "ZHIPU_ADVANCED_MODEL",
+      "capabilities": {
+        "supports_temperature": true
+      }
+    },
+    "openrouter": {
+      "type": "openai_compatible",
+      "api_key_env": "OPENROUTER_API_KEY",
+      "base_url": "https://openrouter.ai/api/v1",
+      "default_model_env": "OPENROUTER_DEFAULT_MODEL",
+      "reasoner_model_env": "OPENROUTER_REASONER_MODEL",
+      "capabilities": {
+        "supports_temperature": true
+      },
+      "model_overrides": [
+        {
+          "model_prefix": "z-ai/",
+          "capabilities": {
+            "supports_temperature": false
+          }
+        }
+      ]
+    }
+  }
+}

@@ -97,17 +97,13 @@ class BaseAgent:
             # 记录API调用开始时间
             api_start_time = time.time()
             
-            temperature_to_use = temperature
-            if self.provider_name.lower() == "openrouter" and (model_to_use or "").startswith("z-ai/"):
-                temperature_to_use = None
-
             # 调用LLM
             result = self.llm_manager.call_llm(
                 provider_name=self.provider_name,
                 messages=messages,
                 model=model_to_use,
                 use_reasoner=self.use_reasoner,
-                temperature=temperature_to_use
+                temperature=temperature
             )
             
             # 处理返回结果（可能是字符串或元组）
@@ -134,12 +130,15 @@ class RequirementAnalyzer(BaseAgent):
     
     def __init__(self, system_datetime: str = None, provider: str = None):
         provider = provider or config.REQUIREMENT_ANALYZER_PROVIDER
+        model = config.REQUIREMENT_ANALYZER_MODEL or None
+        use_reasoner = config.REQUIREMENT_ANALYZER_USE_REASONER
         super().__init__(
             "需求分析师", 
             REQUIREMENT_ANALYZER_PROMPT, 
-            use_reasoner=False, 
+            use_reasoner=use_reasoner,
             system_datetime=system_datetime,
-            provider=provider
+            provider=provider,
+            model=model
         )
     
     def analyze(self, requirement: str) -> Dict[str, Any]:
@@ -241,12 +240,15 @@ class InformationCollector(BaseAgent):
     
     def __init__(self, system_datetime: str = None, provider: str = None):
         provider = provider or config.INFORMATION_COLLECTOR_PROVIDER
+        model = config.INFORMATION_COLLECTOR_MODEL or None
+        use_reasoner = config.INFORMATION_COLLECTOR_USE_REASONER
         super().__init__(
             "信息收集员", 
             INFORMATION_COLLECTOR_PROMPT, 
-            use_reasoner=False, 
+            use_reasoner=use_reasoner,
             system_datetime=system_datetime,
-            provider=provider
+            provider=provider,
+            model=model
         )
     
     def evaluate_and_clean(self, search_results: List[Dict[str, str]], requirement: str, batch_size: int = 5) -> Dict[str, Any]:
@@ -433,12 +435,15 @@ class ReportWriter(BaseAgent):
     
     def __init__(self, system_datetime: str = None, provider: str = None):
         provider = provider or config.REPORT_WRITER_PROVIDER
+        model = config.REPORT_WRITER_MODEL or None
+        use_reasoner = config.REPORT_WRITER_USE_REASONER
         super().__init__(
             "报告撰写员", 
             REPORT_WRITER_PROMPT, 
-            use_reasoner=True, 
+            use_reasoner=use_reasoner,
             system_datetime=system_datetime,
-            provider=provider
+            provider=provider,
+            model=model
         )
 
     def generate_report(self, requirement: str, analysis: Dict, cleaned_data: List) -> str:
@@ -504,12 +509,15 @@ class QualityJudge(BaseAgent):
     
     def __init__(self, system_datetime: str = None, provider: str = None):
         provider = provider or config.QUALITY_JUDGE_PROVIDER
+        model = config.QUALITY_JUDGE_MODEL or None
+        use_reasoner = config.QUALITY_JUDGE_USE_REASONER
         super().__init__(
             "质量评审员", 
             QUALITY_JUDGE_PROMPT, 
-            use_reasoner=False, 
+            use_reasoner=use_reasoner,
             system_datetime=system_datetime,
-            provider=provider
+            provider=provider,
+            model=model
         )
     
     def judge(self, requirement: str, report: str, iteration: int) -> Dict[str, Any]:
@@ -565,12 +573,15 @@ class ComprehensiveReportWriter(BaseAgent):
     
     def __init__(self, system_datetime: str = None, provider: str = None):
         provider = provider or config.COMPREHENSIVE_REPORT_WRITER_PROVIDER
+        model = config.COMPREHENSIVE_REPORT_WRITER_MODEL or None
+        use_reasoner = config.COMPREHENSIVE_REPORT_WRITER_USE_REASONER
         super().__init__(
             role="综合报告撰写员",
             system_prompt=COMPREHENSIVE_REPORT_WRITER_PROMPT,
-            use_reasoner=True,  # 使用思考模式进行深度分析
+            use_reasoner=use_reasoner,
             system_datetime=system_datetime,
-            provider=provider
+            provider=provider,
+            model=model
         )
     
     def analyze_and_integrate(self, 

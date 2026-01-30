@@ -15,7 +15,8 @@ from io import StringIO
 # 导入现有的业务逻辑
 from main import ResearchAgentSystem
 import config
-from agent_config import get_active_agent_config, AGENT_CONFIG_PRESET
+from agent_config import get_active_agent_config
+from runtime_config import load_runtime_config, save_runtime_config
 
 
 class LogRedirector:
@@ -1080,6 +1081,10 @@ class ConfigPanel(wx.Panel):
     def on_save(self, event):
         """保存配置"""
         try:
+            runtime_cfg = load_runtime_config()
+            if not isinstance(runtime_cfg, dict):
+                runtime_cfg = {}
+
             # 读取现有.env文件（保留其他配置）
             env_lines = []
             existing_keys = set()
@@ -1104,6 +1109,11 @@ class ConfigPanel(wx.Panel):
                                     env_lines.append(line)
             
             # Agent配置
+            agents_section = runtime_cfg.get("agents")
+            if not isinstance(agents_section, dict):
+                agents_section = {}
+                runtime_cfg["agents"] = agents_section
+
             for agent_key, controls in self.agent_configs.items():
                 provider = controls['provider'].GetStringSelection()
                 model_choice = controls['model'].GetStringSelection()
@@ -1126,16 +1136,14 @@ class ConfigPanel(wx.Panel):
                             model = model_choice
                 
                 use_reasoner = controls['reasoner'].GetValue()
-                
-                # 生成环境变量名
-                agent_upper = agent_key.upper()
-                
-                if provider:
-                    env_lines.append(f'{agent_upper}_PROVIDER="{provider}"')
-                if model:
-                    env_lines.append(f'{agent_upper}_MODEL="{model}"')
-                if use_reasoner:
-                    env_lines.append(f'{agent_upper}_USE_REASONER="true"')
+
+                existing_agent_cfg = agents_section.get(agent_key, {})
+                if not isinstance(existing_agent_cfg, dict):
+                    existing_agent_cfg = {}
+                existing_agent_cfg["provider"] = provider or "deepseek"
+                existing_agent_cfg["model"] = model or ""
+                existing_agent_cfg["use_reasoner"] = bool(use_reasoner)
+                agents_section[agent_key] = existing_agent_cfg
             
             # API Keys
             for key, input_ctrl in self.env_inputs.items():
@@ -1147,23 +1155,29 @@ class ConfigPanel(wx.Panel):
             searxng_url = self.searxng_url.GetValue().strip()
             if searxng_url:
                 env_lines.append(f'SEARXNG_BASE_URL="{searxng_url}"')
-            
-            # 搜索引擎选择
+
             engine = 'searxng' if self.engine_searxng.GetValue() else 'tavily'
-            env_lines.append(f'SEARCH_ENGINE_TYPE="{engine}"')
-            
-            # 其他配置
-            env_lines.append(f'SKIP_EVALUATION="{"true" if self.skip_eval.GetValue() else "false"}"')
-            env_lines.append(f'SIMPLIFY_REPORT_INPUT="{"true" if self.simplify_report.GetValue() else "false"}"')
-            env_lines.append(f'USE_PRIORITY_SOURCES="{"true" if self.use_priority.GetValue() else "false"}"')
-            env_lines.append(f'MAX_CONCURRENT_EVALUATIONS="{self.concurrent_spin.GetValue()}"')
-            env_lines.append(f'CONTENT_EXTRACT_LENGTH="{self.length_spin.GetValue()}"')
+            search_section = runtime_cfg.get("search")
+            if not isinstance(search_section, dict):
+                search_section = {}
+                runtime_cfg["search"] = search_section
+            search_section["engine_type"] = engine
+            search_section["skip_evaluation"] = bool(self.skip_eval.GetValue())
+            search_section["simplify_report_input"] = bool(self.simplify_report.GetValue())
+            search_section["use_priority_sources"] = bool(self.use_priority.GetValue())
+            search_section["max_concurrent_evaluations"] = int(self.concurrent_spin.GetValue())
+            search_section["content_extract_length"] = int(self.length_spin.GetValue())
+
+            save_ok = save_runtime_config(runtime_cfg)
             
             # 写入文件
             with open('.env', 'w', encoding='utf-8') as f:
                 f.write('\n'.join(env_lines))
             
-            wx.MessageBox("配置已保存到 .env 文件！\n需要重启应用才能生效。", "保存成功", wx.OK | wx.ICON_INFORMATION)
+            if save_ok:
+                wx.MessageBox("配置已保存到 runtime.json 与 .env！\n需要重启应用才能生效。", "保存成功", wx.OK | wx.ICON_INFORMATION)
+            else:
+                wx.MessageBox("已保存 .env，但保存 runtime.json 失败。", "保存部分成功", wx.OK | wx.ICON_WARNING)
             
         except Exception as e:
             wx.MessageBox(f"保存配置失败：{e}", "错误", wx.OK | wx.ICON_ERROR)

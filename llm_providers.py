@@ -2,19 +2,53 @@
 LLM提供商管理模块
 支持多个LLM供应商：DeepSeek、智谱GLM、OpenRouter等
 """
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from openai import OpenAI
 import os
+
+from runtime_config import load_runtime_config
+
+
+def _provider_spec(provider_name: str) -> Dict[str, Any]:
+    runtime = load_runtime_config()
+    if not isinstance(runtime, dict):
+        return {}
+    providers = runtime.get("providers", {})
+    if not isinstance(providers, dict):
+        return {}
+    spec = providers.get(provider_name, {})
+    return spec if isinstance(spec, dict) else {}
 
 
 class LLMProvider:
     """LLM提供商基类"""
     
-    def __init__(self, api_key: str, base_url: str, default_model: str):
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str,
+        default_model: str,
+        capabilities: Optional[Dict[str, Any]] = None,
+        model_overrides: Optional[List[Dict[str, Any]]] = None,
+    ):
         self.api_key = api_key
         self.base_url = base_url
         self.default_model = default_model
         self.client = OpenAI(api_key=api_key, base_url=base_url)
+        self.capabilities = capabilities if isinstance(capabilities, dict) else {}
+        self.model_overrides = model_overrides if isinstance(model_overrides, list) else []
+
+    def _effective_capabilities(self, model_name: str) -> Dict[str, Any]:
+        effective = dict(self.capabilities or {})
+        for ov in self.model_overrides:
+            if not isinstance(ov, dict):
+                continue
+            prefix = ov.get("model_prefix")
+            if prefix and isinstance(prefix, str) and model_name.startswith(prefix):
+                caps = ov.get("capabilities")
+                if isinstance(caps, dict):
+                    effective.update(caps)
+        return effective
     
     def call(self, 
              messages: list,
@@ -34,11 +68,15 @@ class LLMProvider:
             AI响应内容
         """
         try:
+            model_to_use = model or self.default_model
+            effective_caps = self._effective_capabilities(model_to_use)
+            supports_temperature = bool(effective_caps.get("supports_temperature", True))
+
             request_kwargs: Dict[str, Any] = {
-                "model": model or self.default_model,
+                "model": model_to_use,
                 "messages": messages,
             }
-            if temperature is not None:
+            if temperature is not None and supports_temperature:
                 request_kwargs["temperature"] = temperature
             if kwargs:
                 request_kwargs.update(kwargs)
@@ -63,9 +101,17 @@ class DeepSeekProvider(LLMProvider):
     """DeepSeek提供商"""
     
     def __init__(self, api_key: str):
-        base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
-        super().__init__(api_key, base_url, "deepseek-chat")
-        self.reasoner_model = "deepseek-reasoner"
+        spec = _provider_spec("deepseek")
+        base_url = os.getenv(spec.get("base_url_env", "DEEPSEEK_BASE_URL"), "https://api.deepseek.com")
+        default_model = spec.get("default_model", "deepseek-chat")
+        self.reasoner_model = spec.get("reasoner_model", "deepseek-reasoner")
+        super().__init__(
+            api_key,
+            base_url,
+            default_model,
+            capabilities=spec.get("capabilities"),
+            model_overrides=spec.get("model_overrides"),
+        )
     
     def get_model(self, use_reasoner: bool = False) -> str:
         """获取模型名称"""
@@ -76,10 +122,19 @@ class ZhipuProvider(LLMProvider):
     """智谱AI (GLM)提供商"""
     
     def __init__(self, api_key: str):
-        base_url = os.getenv("ZHIPU_BASE_URL", "https://open.bigmodel.cn/api/paas/v4")
-        default_model = os.getenv("ZHIPU_DEFAULT_MODEL", "glm-4.7")  # 从环境变量读取，默认 glm-4.7
-        super().__init__(api_key, base_url, default_model)
-        self.advanced_model = os.getenv("ZHIPU_ADVANCED_MODEL", "glm-4-plus")  # 高级模型
+        spec = _provider_spec("zhipu")
+        base_url = os.getenv(spec.get("base_url_env", "ZHIPU_BASE_URL"), "https://open.bigmodel.cn/api/paas/v4")
+        default_model_env = spec.get("default_model_env", "ZHIPU_DEFAULT_MODEL")
+        reasoner_model_env = spec.get("reasoner_model_env", "ZHIPU_ADVANCED_MODEL")
+        default_model = os.getenv(default_model_env, spec.get("default_model", "glm-4.7"))
+        self.advanced_model = os.getenv(reasoner_model_env, spec.get("reasoner_model", "glm-4-plus"))
+        super().__init__(
+            api_key,
+            base_url,
+            default_model,
+            capabilities=spec.get("capabilities"),
+            model_overrides=spec.get("model_overrides"),
+        )
     
     def get_model(self, use_reasoner: bool = False) -> str:
         """获取模型名称（use_reasoner时使用plus版本）"""
@@ -90,14 +145,24 @@ class OpenRouterProvider(LLMProvider):
     """OpenRouter提供商（聚合多个模型）"""
     
     def __init__(self, api_key: str):
-        base_url = "https://openrouter.ai/api/v1"
-        default_model = os.getenv("OPENROUTER_DEFAULT_MODEL", "xiaomi/mimo-v2-flash:free")
-        super().__init__(api_key, base_url, default_model)
+        spec = _provider_spec("openrouter")
+        base_url = spec.get("base_url") or "https://openrouter.ai/api/v1"
+        default_model_env = spec.get("default_model_env", "OPENROUTER_DEFAULT_MODEL")
+        default_model = os.getenv(default_model_env, "xiaomi/mimo-v2-flash:free")
+        super().__init__(
+            api_key,
+            base_url,
+            default_model,
+            capabilities=spec.get("capabilities"),
+            model_overrides=spec.get("model_overrides"),
+        )
     
     def get_model(self, use_reasoner: bool = False) -> str:
         """获取模型名称"""
         # OpenRouter支持多种模型，可以通过环境变量配置
-        reasoner_model = os.getenv("OPENROUTER_REASONER_MODEL", "openai/o1-preview")
+        spec = _provider_spec("openrouter")
+        reasoner_model_env = spec.get("reasoner_model_env", "OPENROUTER_REASONER_MODEL")
+        reasoner_model = os.getenv(reasoner_model_env, "openai/o1-preview")
         return reasoner_model if use_reasoner else self.default_model
 
 
