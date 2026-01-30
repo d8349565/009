@@ -11,19 +11,19 @@ import config
 import time
 import json
 import os
-from datetime import datetime
 from typing import Dict, List, Any, Optional
+from time_utils import beijing_now_str
 
 
 def print_model_configuration():
     """打印当前使用的模型配置（表格形式）"""
     try:
-        from agent_config import get_active_agent_config, AGENT_CONFIG_PRESET
+        from agent_config import get_active_agent_config
         
         config_data = get_active_agent_config()
         
         print("\n" + "="*80)
-        print(f"🤖 当前使用的AI模型配置（方案: {AGENT_CONFIG_PRESET.upper()}）")
+        print("🤖 当前使用的AI模型配置")
         print("="*80)
         
         # Agent名称映射
@@ -95,7 +95,7 @@ class ResearchAgentSystem:
         self.timer = PerformanceTimer()
         
         # 初始化系统时间并注入各Agent
-        self.system_datetime = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        self.system_datetime = beijing_now_str()
 
         # 初始化各个Agent（传入系统时间）
         self.requirement_analyzer = RequirementAnalyzer(system_datetime=self.system_datetime)
@@ -121,7 +121,7 @@ class ResearchAgentSystem:
 
         print("="*60)
         print(f"信息整理Agent系统已启动（搜索引擎: {search_engine_type.upper()}）")
-        print(f"系统时间: {self.system_datetime}")
+        print(f"系统时间: {self.system_datetime}（北京时间）")
         print(f"最大循环次数: {self.max_iterations}")
         print("="*60)
     
@@ -148,7 +148,7 @@ class ResearchAgentSystem:
                 "",
                 f"**研究主题**: {self.context['original_requirement']}  ",
                 f"**数据来源**: {total_data} 条（有效 {effective_count} 条） | **搜索次数**: {stats.get('total_search_calls', 0)} | **总耗时**: {total_duration:.1f}秒  ",
-                f"**生成时间**: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                f"**生成时间**: {beijing_now_str()}",
                 ""
             ]
             
@@ -202,7 +202,7 @@ class ResearchAgentSystem:
         
         print(f"\n{'='*60}")
         print(f"快速搜索模式 - 处理需求: {requirement}")
-        print(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"时间: {beijing_now_str()}")
         print(f"{'='*60}\n")
         
         # 保存原始需求
@@ -318,7 +318,7 @@ class ResearchAgentSystem:
         """
         print(f"\n{'='*60}")
         print(f"开始处理需求: {requirement}")
-        print(f"时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"时间: {beijing_now_str()}")
         print(f"{'='*60}\n")
         
         # 保存原始需求
@@ -553,11 +553,11 @@ class ResearchAgentSystem:
                 clean_topic = re.sub(r'[^\u4e00-\u9fff\w\-]', '', topic)
                 # 限制长度（最多30个字符）
                 clean_topic = clean_topic[:30]
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                timestamp = beijing_now_str('%Y%m%d_%H%M%S')
                 filename = f"{clean_topic}_{timestamp}.md"
             else:
                 # 如果没有主题，使用默认格式
-                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                timestamp = beijing_now_str('%Y%m%d_%H%M%S')
                 filename = f"report_{timestamp}.md"
         
         # 构建完整路径

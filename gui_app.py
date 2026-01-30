@@ -11,6 +11,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 from io import StringIO
+from time_utils import beijing_now_str
 
 # 导入现有的业务逻辑
 from main import ResearchAgentSystem
@@ -312,7 +313,7 @@ class ComprehensiveWorker(threading.Thread):
             from agents import ComprehensiveReportWriter
             
             writer = ComprehensiveReportWriter(
-                system_datetime=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                system_datetime=beijing_now_str()
             )
             
             # 准备用户输入
@@ -336,7 +337,7 @@ class ComprehensiveWorker(threading.Thread):
             
             # 生成干净的文件名
             clean_topic = "".join(c for c in self.topic if c.isalnum() or c in (' ', '_', '-'))[:50]
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = beijing_now_str("%Y%m%d_%H%M%S")
             filename = f"综合报告_{clean_topic}_{timestamp}.md"
             
             reports_dir = Path("reports")
@@ -547,7 +548,7 @@ class TaskPanel(wx.Panel):
         
     def update_log(self, message):
         """更新日志"""
-        timestamp = datetime.now().strftime("%H:%M:%S")
+        timestamp = beijing_now_str("%H:%M:%S")
         
         # 根据消息内容添加颜色和格式
         if message.strip():
