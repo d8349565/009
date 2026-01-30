@@ -6,6 +6,7 @@ from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from typing import List, Dict, Any
+import re
 import time
 import config
 import threading
@@ -58,6 +59,18 @@ class SearchEngine:
         self.session = requests.Session()
         self.session.headers.update(self.headers)
         self._setup_session()
+
+    @staticmethod
+    def _normalize_url(url: str) -> str:
+        if not url:
+            return ""
+        raw = str(url).strip()
+        m = re.search(r"https?://[^\s`\"']+", raw)
+        candidate = m.group(0) if m else raw
+        candidate = candidate.strip().strip("`'\"")
+        candidate = candidate.lstrip("(").rstrip(")")
+        candidate = candidate.rstrip(").,:;]}>")
+        return candidate.strip()
         
         # 初始化Tavily客户端（如果选择了Tavily）
         self.tavily_client = None
@@ -313,7 +326,7 @@ class SearchEngine:
             seen_urls = set()
             # 解析Tavily返回的结果
             for item in response.get('results', []):
-                url = item.get('url', '')
+                url = self._normalize_url(item.get('url', ''))
                 if url and url in seen_urls:
                     continue
                 if url:
@@ -372,7 +385,7 @@ class SearchEngine:
             
             # 解析SearXNG返回的结果，使用配置中的最大结果数
             for item in data.get('results', [])[:self.max_results]:
-                url = item.get('url', '')
+                url = self._normalize_url(item.get('url', ''))
                 if url and url in seen_urls:
                     continue
                 if url:
@@ -405,6 +418,7 @@ class SearchEngine:
         """
         Fetch page content for a URL.
         """
+        url = self._normalize_url(url)
         if not url:
             return ""
         with self._content_cache_lock:
@@ -415,7 +429,12 @@ class SearchEngine:
         try:
             from urllib.parse import urlparse
             hostname = (urlparse(url).hostname or "").lower()
-            if hostname.endswith("baike.baidu.com") or hostname.endswith("zhihu.com"):
+            if (
+                hostname.endswith("baike.baidu.com")
+                or hostname.endswith("zhihu.com")
+                or hostname.endswith("xueqiu.com")
+                or hostname.endswith("m.whrisheng.com")
+            ):
                 return ""
         except Exception:
             pass
@@ -457,13 +476,16 @@ class SearchEngine:
                 content = content[:self._content_max_length]
 
         except requests.exceptions.SSLError as e:
-            print(f"[Warning] Fetch failed ({url}): {e}")
+            msg = f"{type(e).__name__}: {e}"
+            print(f"[Warning] Fetch failed ({url}): {msg[:300]}")
             return ""
         except requests.exceptions.RequestException as e:
-            print(f"[Warning] Fetch failed ({url}): {e}")
+            msg = f"{type(e).__name__}: {e}"
+            print(f"[Warning] Fetch failed ({url}): {msg[:300]}")
             return ""
         except Exception as e:
-            print(f"[Warning] Fetch failed ({url}): {e}")
+            msg = f"{type(e).__name__}: {e}"
+            print(f"[Warning] Fetch failed ({url}): {msg[:300]}")
             return ""
 
         if content:

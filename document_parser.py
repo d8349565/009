@@ -5,6 +5,7 @@
 import os
 import re
 import io
+import logging
 from typing import Dict, Optional
 
 
@@ -121,6 +122,12 @@ class DocumentParser:
     @staticmethod
     def parse_pdf_from_bytes(pdf_bytes: bytes) -> Dict[str, str]:
         """从字节流解析PDF文档内容"""
+        logger_names = ["pdfminer", "pdfminer.pdfinterp", "pdfminer.psparser", "pdfminer.converter"]
+        previous_levels = {}
+        for name in logger_names:
+            logger = logging.getLogger(name)
+            previous_levels[name] = logger.level
+            logger.setLevel(logging.ERROR)
         try:
             import pdfplumber
             
@@ -203,6 +210,9 @@ class DocumentParser:
                 'outline': '',
                 'format': 'pdf'
             }
+        finally:
+            for name, level in previous_levels.items():
+                logging.getLogger(name).setLevel(level)
 
 
 def test_parser():
