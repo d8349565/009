@@ -60,19 +60,10 @@ class SearchEngine:
         self.session.headers.update(self.headers)
         self._setup_session()
 
-    @staticmethod
-    def _normalize_url(url: str) -> str:
-        if not url:
-            return ""
-        raw = str(url).strip()
-        m = re.search(r"https?://[^\s`\"']+", raw)
-        candidate = m.group(0) if m else raw
-        candidate = candidate.strip().strip("`'\"")
-        candidate = candidate.lstrip("(").rstrip(")")
-        candidate = candidate.rstrip(").,:;]}>")
-        return candidate.strip()
-        
-        # 初始化Tavily客户端（如果选择了Tavily）
+        self._thread_ctx = threading.local()
+        self._fetch_failure_lock = threading.Lock()
+        self._fetch_failures_by_keyword: Dict[str, Dict[str, Any]] = {}
+
         self.tavily_client = None
         if self.engine_type == 'tavily':
             if not TAVILY_AVAILABLE:
@@ -94,6 +85,121 @@ class SearchEngine:
                     print(f"✗ Tavily客户端初始化失败: {e}")
                     print(f"✗ 将使用SearXNG搜索")
                     self.engine_type = 'searxng'
+
+    @staticmethod
+    def _normalize_url(url: str) -> str:
+        if not url:
+            return ""
+        raw = str(url).strip()
+        m = re.search(r"https?://[^\s`\"']+", raw)
+        candidate = m.group(0) if m else raw
+        candidate = candidate.strip().strip("`'\"")
+        candidate = candidate.lstrip("(").rstrip(")")
+        candidate = candidate.rstrip(").,:;]}>")
+        return candidate.strip()
+
+    def _set_current_keyword(self, keyword: str):
+        self._thread_ctx.current_keyword = keyword
+
+    def _get_current_keyword(self) -> str:
+        return getattr(self._thread_ctx, "current_keyword", "") or ""
+
+    def _reset_fetch_failures(self, keyword: str):
+        with self._fetch_failure_lock:
+            self._fetch_failures_by_keyword[keyword] = {
+                "total": 0,
+                "by_category": {},
+            }
+
+    def _classify_fetch_failure(self, error: Exception) -> Dict[str, str]:
+        msg = f"{type(error).__name__}: {error}"
+        winerr = None
+        m = re.search(r"WinError\s+(\d+)", msg)
+        if m:
+            try:
+                winerr = int(m.group(1))
+            except Exception:
+                winerr = None
+
+        if isinstance(error, requests.exceptions.SSLError):
+            return {"category": "SSL", "reason": msg}
+        if isinstance(error, requests.exceptions.Timeout):
+            return {"category": "TIMEOUT", "reason": msg}
+        if isinstance(error, requests.exceptions.ConnectionError):
+            if winerr == 10061:
+                return {"category": "CONN_REFUSED_10061", "reason": msg}
+            if winerr in (10053, 10054):
+                return {"category": "CONN_ABORT_RESET_10053_10054", "reason": msg}
+            return {"category": "CONNECTION_ERROR", "reason": msg}
+        if isinstance(error, requests.exceptions.RequestException):
+            return {"category": "REQUEST_ERROR", "reason": msg}
+        return {"category": "UNKNOWN", "reason": msg}
+
+    def _record_fetch_failure(self, keyword: str, url: str, category: str, reason: str):
+        if config.FETCH_FAILURE_LOG_MODE == "silent":
+            return
+        url = self._normalize_url(url)
+        try:
+            from urllib.parse import urlparse
+            hostname = (urlparse(url).hostname or "").lower()
+        except Exception:
+            hostname = ""
+
+        with self._fetch_failure_lock:
+            entry = self._fetch_failures_by_keyword.get(keyword)
+            if not entry:
+                entry = {"total": 0, "by_category": {}}
+                self._fetch_failures_by_keyword[keyword] = entry
+            entry["total"] += 1
+
+            by_category = entry["by_category"]
+            cat = by_category.get(category)
+            if not cat:
+                cat = {"count": 0, "examples": [], "domains": {}}
+                by_category[category] = cat
+            cat["count"] += 1
+            if url and url not in cat["examples"] and len(cat["examples"]) < 3:
+                cat["examples"].append(url)
+            if hostname:
+                cat["domains"][hostname] = cat["domains"].get(hostname, 0) + 1
+
+    def _print_fetch_failure_summary(self, keyword: str):
+        if config.FETCH_FAILURE_LOG_MODE != "summary":
+            return
+        with self._fetch_failure_lock:
+            entry = self._fetch_failures_by_keyword.get(keyword)
+        if not entry or not entry.get("total"):
+            return
+
+        name_map = {
+            "SSL": "SSL/证书/握手",
+            "TIMEOUT": "请求超时",
+            "CONN_REFUSED_10061": "连接被拒绝(10061)",
+            "CONN_ABORT_RESET_10053_10054": "连接中断/重置(10053/10054)",
+            "CONNECTION_ERROR": "连接错误",
+            "REQUEST_ERROR": "请求错误",
+            "HTTP_403_429": "HTTP 403/429",
+            "HTTP_ERROR": "HTTP 错误",
+            "UNKNOWN": "未知错误",
+        }
+
+        total = int(entry.get("total", 0))
+        by_category = entry.get("by_category", {}) if isinstance(entry.get("by_category"), dict) else {}
+        items = sorted(by_category.items(), key=lambda kv: kv[1].get("count", 0), reverse=True)
+        if not items:
+            return
+
+        print(f"⚠️ 抓取失败汇总（关键词：{keyword}）共 {total} 条")
+        for cat_key, cat_val in items:
+            count = int(cat_val.get("count", 0))
+            label = name_map.get(cat_key, cat_key)
+            examples = cat_val.get("examples", [])
+            if config.LOG_LEVEL == "minimal":
+                continue
+            if examples:
+                print(f"  - {label}: {count}（示例：{examples[0]}）")
+            else:
+                print(f"  - {label}: {count}")
     
     def enable_priority_sources(self, enabled: bool = True):
         """启用或禁用优先搜索源"""
@@ -181,6 +287,7 @@ class SearchEngine:
                     last_ln = next((l for l in reversed(self._keyword_logs) if l.get('keyword') == keyword), None)
                     dur = last_ln.get('duration') if last_ln else None
                     print(f"✓ 完成搜索: {keyword} ({len(results)}条) - engine={self.engine_type} duration={dur:.2f}s" if dur is not None else f"✓ 完成搜索: {keyword} ({len(results)}条)")
+                    self._print_fetch_failure_summary(keyword)
                 except Exception as e:
                     print(f"✗ 搜索失败: {keyword} - {str(e)}")
         
@@ -310,6 +417,8 @@ class SearchEngine:
             print(f"[警告] Tavily客户端未初始化，回退到SearXNG搜索")
             return self._searxng_search(keyword)
         
+        self._set_current_keyword(keyword)
+        self._reset_fetch_failures(keyword)
         try:
             # 使用Tavily搜索，直接传入完整关键词
             response = self.tavily_client.search(
@@ -352,11 +461,15 @@ class SearchEngine:
             print(f"[警告] Tavily搜索失败 ({keyword}): {e}")
             print(f"  回退到SearXNG搜索")
             return self._searxng_search(keyword)
+        finally:
+            self._set_current_keyword("")
     
     def _searxng_search(self, keyword: str) -> List[Dict[str, str]]:
         """
         使用SearXNG进行真实搜索
         """
+        self._set_current_keyword(keyword)
+        self._reset_fetch_failures(keyword)
         try:
             # 构建SearXNG API请求
             url = f"{config.SEARXNG_BASE_URL}/search"
@@ -413,6 +526,8 @@ class SearchEngine:
             print(f"[警告] SearXNG搜索失败 ({keyword}): {e}")
             print(f"  返回空结果")
             return []
+        finally:
+            self._set_current_keyword("")
     
     def fetch_content(self, url: str) -> str:
         """
@@ -443,7 +558,10 @@ class SearchEngine:
         try:
             response = self.session.get(url, headers=self.headers, timeout=self.timeout)
             if response.status_code in (403, 429):
-                print(f"[Warning] Fetch failed ({url}): {response.status_code}")
+                keyword = self._get_current_keyword() or "(未知关键词)"
+                self._record_fetch_failure(keyword, url, "HTTP_403_429", str(response.status_code))
+                if config.FETCH_FAILURE_LOG_MODE == "raw":
+                    print(f"[Warning] Fetch failed ({url}): {response.status_code}")
                 return ""
             response.raise_for_status()
 
@@ -476,16 +594,25 @@ class SearchEngine:
                 content = content[:self._content_max_length]
 
         except requests.exceptions.SSLError as e:
-            msg = f"{type(e).__name__}: {e}"
-            print(f"[Warning] Fetch failed ({url}): {msg[:300]}")
+            keyword = self._get_current_keyword() or "(未知关键词)"
+            classified = self._classify_fetch_failure(e)
+            self._record_fetch_failure(keyword, url, classified["category"], classified["reason"][:200])
+            if config.FETCH_FAILURE_LOG_MODE == "raw":
+                print(f"[Warning] Fetch failed ({url}): {classified['reason'][:300]}")
             return ""
         except requests.exceptions.RequestException as e:
-            msg = f"{type(e).__name__}: {e}"
-            print(f"[Warning] Fetch failed ({url}): {msg[:300]}")
+            keyword = self._get_current_keyword() or "(未知关键词)"
+            classified = self._classify_fetch_failure(e)
+            self._record_fetch_failure(keyword, url, classified["category"], classified["reason"][:200])
+            if config.FETCH_FAILURE_LOG_MODE == "raw":
+                print(f"[Warning] Fetch failed ({url}): {classified['reason'][:300]}")
             return ""
         except Exception as e:
-            msg = f"{type(e).__name__}: {e}"
-            print(f"[Warning] Fetch failed ({url}): {msg[:300]}")
+            keyword = self._get_current_keyword() or "(未知关键词)"
+            classified = self._classify_fetch_failure(e)
+            self._record_fetch_failure(keyword, url, classified["category"], classified["reason"][:200])
+            if config.FETCH_FAILURE_LOG_MODE == "raw":
+                print(f"[Warning] Fetch failed ({url}): {classified['reason'][:300]}")
             return ""
 
         if content:

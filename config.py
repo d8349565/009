@@ -142,6 +142,8 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", str(_runtime_logging.get("level", "normal")))
 # 是否在控制台打印最终报告内容
 PRINT_FINAL_REPORT = parse_bool(os.getenv("PRINT_FINAL_REPORT"), bool(_runtime_logging.get("print_final_report", False)))
 
+FETCH_FAILURE_LOG_MODE = os.getenv("FETCH_FAILURE_LOG_MODE", str(_runtime_logging.get("fetch_failure_log_mode", "summary"))).lower()
+
 # 优先搜索源配置
 PRIORITY_SOURCES = {
     "enabled": USE_PRIORITY_SOURCES,  # 使用环境变量控制

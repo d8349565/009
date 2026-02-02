@@ -2,7 +2,8 @@
   "version": 1,
   "logging": {
     "level": "normal",
-    "print_final_report": false
+    "print_final_report": false,
+    "fetch_failure_log_mode": "summary"
   },
   "search": {
     "engine_type": "searxng",
