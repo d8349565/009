@@ -425,9 +425,6 @@ class TaskPanel(wx.Panel):
         config_sizer.Add(self.mode_quick, 0, wx.RIGHT, 10)
         config_sizer.Add(self.mode_full, 0, wx.RIGHT, 20)
         
-        self.skip_eval_checkbox = wx.CheckBox(self, label="跳过评估")
-        config_sizer.Add(self.skip_eval_checkbox, 0)
-        
         main_sizer.Add(config_sizer, 0, wx.ALL, 5)
         
         # 进度
@@ -1039,18 +1036,9 @@ class ConfigPanel(wx.Panel):
         
         sizer.Add(engine_sizer, 0, wx.EXPAND | wx.ALL, 10)
         
-        # 其他配置
-        other_box = wx.StaticBox(panel, label="其他配置")
+        # 搜索参数
+        other_box = wx.StaticBox(panel, label="搜索参数")
         other_sizer = wx.StaticBoxSizer(other_box, wx.VERTICAL)
-        
-        self.skip_eval = wx.CheckBox(panel, label="跳过信息评估（提速70%）")
-        other_sizer.Add(self.skip_eval, 0, wx.ALL, 5)
-        
-        self.simplify_report = wx.CheckBox(panel, label="精简报告输入")
-        other_sizer.Add(self.simplify_report, 0, wx.ALL, 5)
-        
-        self.use_priority = wx.CheckBox(panel, label="优先搜索权威来源")
-        other_sizer.Add(self.use_priority, 0, wx.ALL, 5)
         
         # 并发数
         concurrent_sizer = wx.BoxSizer(wx.HORIZONTAL)
@@ -1096,10 +1084,7 @@ class ConfigPanel(wx.Panel):
             else:
                 self.engine_tavily.SetValue(True)
             
-            # 加载其他配置
-            self.skip_eval.SetValue(config.SKIP_EVALUATION)
-            self.simplify_report.SetValue(config.SIMPLIFY_REPORT_INPUT)
-            self.use_priority.SetValue(config.USE_PRIORITY_SOURCES)
+            # 加载搜索参数
             self.concurrent_spin.SetValue(config.MAX_CONCURRENT_EVALUATIONS)
             self.length_spin.SetValue(config.CONTENT_EXTRACT_LENGTH)
             
@@ -1229,9 +1214,9 @@ class ConfigPanel(wx.Panel):
                 search_section = {}
                 runtime_cfg["search"] = search_section
             search_section["engine_type"] = engine
-            search_section["skip_evaluation"] = bool(self.skip_eval.GetValue())
-            search_section["simplify_report_input"] = bool(self.simplify_report.GetValue())
-            search_section["use_priority_sources"] = bool(self.use_priority.GetValue())
+            search_section.pop("skip_evaluation", None)
+            search_section.pop("simplify_report_input", None)
+            search_section.pop("use_priority_sources", None)
             search_section["max_concurrent_evaluations"] = int(self.concurrent_spin.GetValue())
             search_section["content_extract_length"] = int(self.length_spin.GetValue())
 
@@ -1293,9 +1278,6 @@ class ConfigPanel(wx.Panel):
             # 重置其他配置
             self.searxng_url.SetValue('http://localhost:8080')
             self.engine_searxng.SetValue(True)
-            self.skip_eval.SetValue(False)
-            self.simplify_report.SetValue(False)
-            self.use_priority.SetValue(False)
             self.concurrent_spin.SetValue(6)
             self.length_spin.SetValue(4000)
             

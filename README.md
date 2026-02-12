@@ -8,7 +8,7 @@
 
 *   **🤖 智能多 Agent 协作**: 需求分析、信息收集、报告撰写、质量评审、综合分析 5 个专业 Agent 分工协作。
 *   **🧠 多 LLM 供应商支持**: 灵活配置 DeepSeek (高性价比)、智谱 GLM (中文优化)、OpenRouter (聚合模型) 等不同供应商，实现成本与质量的最佳平衡。
-*   **🖥️ 现代化 GUI 界面**: 基于 wxPython 的桌面图形界面，操作直观，实时显示任务日志和进度。
+*   **🖥️ 现代化 GUI 界面**: 默认提供 PyQt6 桌面图形界面（并保留 wxPython 版本），操作直观，实时显示任务日志和进度。
 *   **📚 综合报告生成**: 支持整合多个历史报告，进行跨文档的数据交叉验证、矛盾识别和新洞察发现。
 *   **🔍 灵活搜索模式**:
     *   **快速模式**: 单次搜索，约 30 秒出结果。
@@ -40,7 +40,12 @@ TAVILY_API_KEY=tvly-xxxxxxxx (可选，用于云端搜索)
 ### 启动应用
 **方式 1 (推荐)**: 双击根目录下的 `启动GUI.bat`。
 
-**方式 2**: 命令行运行
+**方式 2**: 命令行运行（PyQt6 版）
+```bash
+python gui_app_pyqt6.py
+```
+
+**方式 3**: 命令行运行（wxPython 兼容版）
 ```bash
 python gui_app.py
 ```
@@ -75,7 +80,8 @@ python gui_app.py
 
 ```
 009/
-├── gui_app.py                 # GUI 主程序入口
+├── gui_app_pyqt6.py           # GUI 主程序入口（PyQt6）
+├── gui_app.py                 # GUI 兼容入口（wxPython）
 ├── main.py                    # 命令行入口 & 核心逻辑编排
 ├── agents.py                  # Agent 类定义 (分析师, 收集员, 撰写员等)
 ├── search_engine.py           # 搜索引擎封装 (SearXNG, Tavily)

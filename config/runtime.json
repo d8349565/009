@@ -13,9 +13,6 @@
     "max_results": 30,
     "content_extract_length": 5000,
     "max_concurrent_evaluations": 6,
-    "skip_evaluation": false,
-    "simplify_report_input": false,
-    "use_priority_sources": false,
     "early_stop_on_satisfaction": true
   },
   "agents": {

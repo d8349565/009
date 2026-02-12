@@ -148,9 +148,9 @@ MAX_LOOP_COUNT = int(os.getenv("MAX_LOOP_COUNT", str(_runtime_search.get("max_lo
 SEARCH_TIMEOUT = int(os.getenv("SEARCH_TIMEOUT", str(_runtime_search.get("timeout", 10))))
 MAX_SEARCH_RESULTS = int(os.getenv("MAX_SEARCH_RESULTS", str(_runtime_search.get("max_results", 30))))
 
-# 性能优化配置
-SKIP_EVALUATION = parse_bool(os.getenv("SKIP_EVALUATION"), bool(_runtime_search.get("skip_evaluation", False)))
-SIMPLIFY_REPORT_INPUT = parse_bool(os.getenv("SIMPLIFY_REPORT_INPUT"), bool(_runtime_search.get("simplify_report_input", False)))
+# 以下三个开关已下线，不再对外暴露配置。
+SKIP_EVALUATION = False
+SIMPLIFY_REPORT_INPUT = False
 
 # 数据提取配置
 # 控制发送给AI评估的内容长度（字符数）
@@ -171,8 +171,7 @@ FETCH_BACKOFF_FACTOR = float(os.getenv("FETCH_BACKOFF_FACTOR", "0.5"))
 # 5 = 并发5批（激进，提速75%，可能触发限流）
 MAX_CONCURRENT_EVALUATIONS = int(os.getenv("MAX_CONCURRENT_EVALUATIONS", str(_runtime_search.get("max_concurrent_evaluations", 3))))
 
-# 优先搜索源开关（是否启用权威机构优先搜索）
-USE_PRIORITY_SOURCES = parse_bool(os.getenv("USE_PRIORITY_SOURCES"), bool(_runtime_search.get("use_priority_sources", False)))
+USE_PRIORITY_SOURCES = False
 
 # 智能停止配置
 # 首轮报告质量满足时是否自动停止（不继续迭代）
@@ -194,7 +193,7 @@ FETCH_FAILURE_LOG_MODE = os.getenv("FETCH_FAILURE_LOG_MODE", str(_runtime_loggin
 
 # 优先搜索源配置
 PRIORITY_SOURCES = {
-    "enabled": USE_PRIORITY_SOURCES,  # 使用环境变量控制
+    "enabled": USE_PRIORITY_SOURCES,
     "organizations": [
         # 权威研究机构
         
