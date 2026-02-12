@@ -11,6 +11,7 @@ import time
 import config
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import parse_qs, unquote, urlencode, urlparse, urlunparse
 
 # 尝试导入Tavily
 TAVILY_AVAILABLE = False
@@ -96,10 +97,74 @@ class SearchEngine:
         candidate = candidate.strip().strip("`'\"")
         candidate = candidate.lstrip("(").rstrip(")")
         candidate = candidate.rstrip(").,:;]}>")
+
+        tracking_keys = {
+            "spm", "from", "source", "src", "ref", "refer", "referer",
+            "sid", "sessionid", "shareid", "share_token", "timestamp",
+            "yclid", "s_channel", "feature", "isappinstalled", "scene",
+            "clickid", "oid",
+        }
+
+        # Unwrap common search-engine redirect links and clean tracking params.
+        for _ in range(3):
+            try:
+                parsed = urlparse(candidate)
+            except Exception:
+                break
+            if not parsed.scheme or not parsed.netloc:
+                break
+
+            host = (parsed.hostname or "").lower()
+            path = (parsed.path or "").lower()
+            query = parse_qs(parsed.query, keep_blank_values=False)
+
+            if (host in {"sogou.com", "www.sogou.com"} and path.startswith("/link")) or (
+                host in {"baidu.com", "www.baidu.com"} and path == "/link"
+            ):
+                target = (
+                    query.get("url", [None])[0]
+                    or query.get("target", [None])[0]
+                    or query.get("u", [None])[0]
+                )
+                if target:
+                    candidate = unquote(target).strip()
+                    continue
+                return ""
+
+            clean_query = {}
+            for k, values in query.items():
+                key_l = k.lower()
+                if key_l.startswith("utm_") or key_l in tracking_keys:
+                    continue
+                clean_query[k] = values
+
+            rebuilt = urlunparse(
+                (parsed.scheme, parsed.netloc, parsed.path.rstrip("/"), "", urlencode(clean_query, doseq=True), "")
+            )
+            candidate = rebuilt.strip()
+            break
+
         return candidate.strip()
 
     def _set_current_keyword(self, keyword: str):
         self._thread_ctx.current_keyword = keyword
+
+    @staticmethod
+    def _should_skip_result_url(url: str) -> bool:
+        """Skip unresolved redirect/search-jump URLs."""
+        if not url:
+            return True
+        try:
+            parsed = urlparse(url)
+            host = (parsed.hostname or "").lower()
+            path = (parsed.path or "").lower()
+            if host in {"sogou.com", "www.sogou.com"} and path.startswith("/link"):
+                return True
+            if host in {"baidu.com", "www.baidu.com"} and path == "/link":
+                return True
+        except Exception:
+            return True
+        return False
 
     def _get_current_keyword(self) -> str:
         return getattr(self._thread_ctx, "current_keyword", "") or ""
@@ -233,6 +298,52 @@ class SearchEngine:
         self.session.mount("http://", adapter)
         self.session.mount("https://", adapter)
 
+    def _needs_full_content(self, result: Dict[str, Any]) -> bool:
+        """Decide whether a result should fetch full page content."""
+        if not result.get("url"):
+            return False
+        content = result.get("content", "") or ""
+        return len(content) < 500
+
+    def _fetch_for_result(self, keyword: str, url: str) -> str:
+        """Fetch helper used by candidate enrichment workers."""
+        self._set_current_keyword(keyword or "")
+        try:
+            return self.fetch_content(url)
+        finally:
+            self._set_current_keyword("")
+
+    def _enrich_results_content(self, results: List[Dict[str, Any]]) -> None:
+        """
+        Fetch full content only for selected candidates.
+        This avoids fetching pages for results that would be discarded.
+        """
+        candidates = [
+            (idx, item)
+            for idx, item in enumerate(results)
+            if self._needs_full_content(item)
+        ]
+        if not candidates:
+            return
+
+        max_workers = min(6, max(1, len(candidates)))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_idx = {}
+            for idx, item in candidates:
+                keyword = item.get("_search_keyword", "") or ""
+                url = item.get("url", "")
+                future = executor.submit(self._fetch_for_result, keyword, url)
+                future_to_idx[future] = idx
+
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                try:
+                    full_content = future.result()
+                except Exception:
+                    full_content = ""
+                if full_content and len(full_content) > len(results[idx].get("content", "") or ""):
+                    results[idx]["content"] = full_content
+
     def search(self, keywords: List[str]) -> List[Dict[str, str]]:
         """
         执行并行搜索（不拆解关键词，直接使用完整关键词）
@@ -262,9 +373,9 @@ class SearchEngine:
                 })
                 # 根据引擎类型选择搜索方法
                 if self.engine_type == 'tavily':
-                    future = executor.submit(self._tavily_search, keyword)
+                    future = executor.submit(self._tavily_search, keyword, False)
                 else:  # 默认使用 searxng
-                    future = executor.submit(self._searxng_search, keyword)
+                    future = executor.submit(self._searxng_search, keyword, False)
 
                 future_to_keyword[future] = keyword
             
@@ -296,6 +407,36 @@ class SearchEngine:
         
         # 去重
         all_results = self._deduplicate_and_prioritize(all_results)
+
+        # Two-stage search:
+        # 1) pre-select by score/snippet
+        # 2) fetch full content only for selected candidates
+        target_max = max(1, self.max_results)
+        fetch_budget = min(len(all_results), max(6, int(len(all_results) * 0.6)))
+        fetch_candidates = self._smart_select_results(all_results, fetch_budget)
+        if fetch_candidates:
+            print(f"  -> preselected {len(fetch_candidates)} results; fetching full content only for this set...")
+            self._enrich_results_content(fetch_candidates)
+
+            # Merge enriched content back into the full candidate pool so we still
+            # can return up to MAX_SEARCH_RESULTS while only fetching a subset.
+            enriched_content = {
+                item.get("url", ""): item.get("content", "")
+                for item in fetch_candidates
+                if item.get("url")
+            }
+            for item in all_results:
+                url = item.get("url", "")
+                full_text = enriched_content.get(url, "")
+                if full_text and len(full_text) > len(item.get("content", "") or ""):
+                    item["content"] = full_text
+        for keyword in keywords_to_search:
+            self._print_fetch_failure_summary(keyword)
+
+        # Final selection after enrichment.
+        final_results = self._smart_select_results(all_results, target_max)
+        for item in final_results:
+            item.pop("_search_keyword", None)
         
         elapsed_time = time.time() - start_time
         
@@ -306,8 +447,7 @@ class SearchEngine:
             print(f"\n共找到 {len(all_results)} 条搜索结果 (耗时: {elapsed_time:.1f}秒)")
         
         # 智能截取：优先取优先级高 + 内容完整的结果
-        final_results = self._smart_select_results(all_results, self.max_results)
-        if len(all_results) > self.max_results:
+        if len(all_results) > target_max:
             print(f"  → 智能筛选前 {len(final_results)} 条用于分析（配置: MAX_SEARCH_RESULTS={self.max_results}）")
         
         return final_results
@@ -322,7 +462,7 @@ class SearchEngine:
         # 为每个权威机构添加机构名到搜索关键词
         for org in organizations[:5]:  # 只取前5个权威机构避免搜索过多
             enhanced_keyword = f"{keyword} {org}"
-            results = self._searxng_search(enhanced_keyword)
+            results = self._searxng_search(enhanced_keyword, True)
             
             # 标记为优先来源
             for result in results:
@@ -409,13 +549,13 @@ class SearchEngine:
         
         return selected[:max_count]
     
-    def _tavily_search(self, keyword: str) -> List[Dict[str, str]]:
+    def _tavily_search(self, keyword: str, fetch_full_content: bool = True) -> List[Dict[str, str]]:
         """
         使用Tavily进行真实搜索（不拆解关键词）
         """
         if not self.tavily_client:
             print(f"[警告] Tavily客户端未初始化，回退到SearXNG搜索")
-            return self._searxng_search(keyword)
+            return self._searxng_search(keyword, fetch_full_content)
         
         self._set_current_keyword(keyword)
         self._reset_fetch_failures(keyword)
@@ -436,6 +576,8 @@ class SearchEngine:
             # 解析Tavily返回的结果
             for item in response.get('results', []):
                 url = self._normalize_url(item.get('url', ''))
+                if self._should_skip_result_url(url):
+                    continue
                 if url and url in seen_urls:
                     continue
                 if url:
@@ -443,12 +585,13 @@ class SearchEngine:
                 result = {
                     'title': item.get('title', '无标题'),
                     'url': url,
-                    'content': item.get('content', '') or item.get('snippet', '')
+                    'content': item.get('content', '') or item.get('snippet', ''),
+                    '_search_keyword': keyword,
                 }
                 
                 # 尝试获取完整网页内容（提高数据完整性）
                 # 如果内容过短（<500字符）或内容为空，则抓取完整网页
-                if (len(result['content']) < 500 or not result['content']) and result['url']:
+                if fetch_full_content and (len(result['content']) < 500 or not result['content']) and result['url']:
                     full_content = self.fetch_content(result['url'])
                     if full_content and len(full_content) > len(result['content']):
                         result['content'] = full_content
@@ -460,11 +603,11 @@ class SearchEngine:
         except Exception as e:
             print(f"[警告] Tavily搜索失败 ({keyword}): {e}")
             print(f"  回退到SearXNG搜索")
-            return self._searxng_search(keyword)
+            return self._searxng_search(keyword, fetch_full_content)
         finally:
             self._set_current_keyword("")
     
-    def _searxng_search(self, keyword: str) -> List[Dict[str, str]]:
+    def _searxng_search(self, keyword: str, fetch_full_content: bool = True) -> List[Dict[str, str]]:
         """
         使用SearXNG进行真实搜索
         """
@@ -499,6 +642,8 @@ class SearchEngine:
             # 解析SearXNG返回的结果，使用配置中的最大结果数
             for item in data.get('results', [])[:self.max_results]:
                 url = self._normalize_url(item.get('url', ''))
+                if self._should_skip_result_url(url):
+                    continue
                 if url and url in seen_urls:
                     continue
                 if url:
@@ -507,12 +652,13 @@ class SearchEngine:
                     'title': item.get('title', '无标题'),
                     'url': url,
                     'content': item.get('content', '') or item.get('snippet', ''),
+                    '_search_keyword': keyword,
                     'score': item.get('score', 0)  # 添加SearXNG的相关性评分
                 }
                 
                 # 尝试获取完整网页内容（提高数据完整性）
                 # 如果内容过短（<500字符）或内容为空，则抓取完整网页
-                if (len(result['content']) < 500 or not result['content']) and result['url']:
+                if fetch_full_content and (len(result['content']) < 500 or not result['content']) and result['url']:
                     full_content = self.fetch_content(result['url'])
                     if full_content and len(full_content) > len(result['content']):
                         result['content'] = full_content

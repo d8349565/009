@@ -4,8 +4,10 @@ Agent基类和各种专业Agent实现
 import config
 import json
 import time
+import re
 from typing import List, Dict, Any, Optional
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from urllib.parse import urlparse
 from agent_prompts import (
     REQUIREMENT_ANALYZER_PROMPT,
     INFORMATION_COLLECTOR_PROMPT,
@@ -135,6 +137,42 @@ class RequirementAnalyzer(BaseAgent):
             model=model,
             temperature=temperature,
         )
+
+    def _parse_analysis_json(self, response: str) -> Optional[Dict[str, Any]]:
+        """Try to parse model output as JSON with lightweight repair."""
+        candidates: List[str] = []
+
+        text = (response or "").strip()
+        if not text:
+            return None
+
+        if "```json" in text:
+            candidates.append(text.split("```json", 1)[1].split("```", 1)[0].strip())
+        elif "```" in text:
+            candidates.append(text.split("```", 1)[1].split("```", 1)[0].strip())
+
+        candidates.append(text)
+
+        # Also try the outermost JSON object slice.
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            candidates.append(text[start:end + 1].strip())
+
+        for raw in candidates:
+            if not raw:
+                continue
+            repaired = raw.replace("\ufeff", "").strip()
+            # Remove JS-style comments and trailing commas.
+            repaired = re.sub(r"//.*?$", "", repaired, flags=re.MULTILINE)
+            repaired = re.sub(r",\s*([}\]])", r"\1", repaired)
+            try:
+                parsed = json.loads(repaired)
+                if isinstance(parsed, dict):
+                    return parsed
+            except Exception:
+                continue
+        return None
     
     def analyze(self, requirement: str) -> Dict[str, Any]:
         """分析需求"""
@@ -148,27 +186,26 @@ class RequirementAnalyzer(BaseAgent):
         
         print(f"  [需求分析师] API调用耗时: {duration:.2f}秒")
         
-        # 首先尝试JSON解析
-        json_parsed = False
-        parsed_result = None
-        try:
-            # 尝试提取JSON
-            if "```json" in response:
-                json_str = response.split("```json")[1].split("```")[0].strip()
-            elif "```" in response:
-                json_str = response.split("```")[1].split("```")[0].strip()
-            else:
-                json_str = response
-            
-            parsed_result = json.loads(json_str)
-            json_parsed = True
-        except json.JSONDecodeError:
-            pass
-        except Exception as e:
-            print(f"  [调试] JSON处理异常: {type(e).__name__}: {e}")
+        parsed_result = self._parse_analysis_json(response)
+
+        # JSON 首次解析失败时，追加一次“严格JSON”纠正请求，提升稳定性。
+        if not parsed_result:
+            try:
+                repair_prompt = (
+                    "请把下面内容改写为严格 JSON（不能有注释、不能有多余文本、不能有代码块）。\n"
+                    "必须包含字段: understanding, key_concepts, time_range, search_keywords。\n\n"
+                    f"原始需求: {requirement}\n\n"
+                    f"待修正内容:\n{response[:2000]}"
+                )
+                repaired_response = self.call_llm(repair_prompt, temperature=0)
+                parsed_result = self._parse_analysis_json(repaired_response)
+                if parsed_result:
+                    response = repaired_response
+            except Exception as e:
+                print(f"  [调试] JSON纠正重试失败: {type(e).__name__}: {e}")
         
         # 如果JSON解析成功，优先使用AI返回的字段（支持多种字段名）
-        if json_parsed and parsed_result:
+        if parsed_result:
             # 获取关键词（支持不同的字段名）
             keywords = (parsed_result.get('keywords') or 
                        parsed_result.get('key_concepts') or 
@@ -194,8 +231,6 @@ class RequirementAnalyzer(BaseAgent):
         # 如果JSON解析失败或缺少关键字段，使用强化的降级逻辑
         print(f"  [调试] JSON解析失败或字段为空，使用降级逻辑")
         print(f"  [调试] 响应前300字符: {response[:300]}")
-        
-        import re
         
         # 策略1：尝试从AI响应中智能提取关键词
         # 查找被引号或括号括起来的内容
@@ -247,6 +282,132 @@ class InformationCollector(BaseAgent):
             model=model,
             temperature=temperature,
         )
+
+    @staticmethod
+    def _normalize_source_url(url: str) -> str:
+        if not url:
+            return ""
+        try:
+            parsed = urlparse(str(url).strip())
+            if not parsed.scheme or not parsed.netloc:
+                return str(url).strip()
+            # Drop fragments; keep query because some pages rely on it.
+            return parsed._replace(fragment="").geturl().strip()
+        except Exception:
+            return str(url).strip()
+
+    @staticmethod
+    def _is_redirect_source(url: str) -> bool:
+        try:
+            parsed = urlparse(url)
+            host = (parsed.hostname or "").lower()
+            path = (parsed.path or "").lower()
+            if host in {"sogou.com", "www.sogou.com"} and path.startswith("/link"):
+                return True
+            if host in {"baidu.com", "www.baidu.com"} and path == "/link":
+                return True
+        except Exception:
+            return False
+        return False
+
+    @staticmethod
+    def _extract_focus_entity(requirement: str) -> str:
+        req = (requirement or "").strip()
+        if not req:
+            return ""
+        patterns = [
+            r"(?:为什么|为何|请分析|分析)?(?:最近|近期)?([\u4e00-\u9fffA-Za-z]{2,16}?)(?:股票|股价)",
+            r"([\u4e00-\u9fffA-Za-z]{2,16}?)(?:上涨|下跌|走势|原因)",
+        ]
+        for p in patterns:
+            m = re.search(p, req)
+            if m:
+                entity = (m.group(1) or "").strip()
+                if entity:
+                    return entity
+        return ""
+
+    @staticmethod
+    def _matches_focus_entity(source: Dict[str, Any], entity: str) -> bool:
+        if not entity:
+            return True
+        title = str(source.get("title", "") or "")
+        content = str(source.get("content", "") or "")
+        url = str(source.get("url", "") or "")
+        target = entity.lower()
+        return target in title.lower() or target in content.lower() or target in url.lower()
+
+    def _hydrate_valid_sources(self, valid_sources: List[Dict[str, Any]], original_batch: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+        """Fill missing fields from original batch and normalize credibility."""
+        hydrated: List[Dict[str, Any]] = []
+        for source in valid_sources:
+            if not isinstance(source, dict):
+                continue
+            item = dict(source)
+
+            source_id = item.get("source_id")
+            base = None
+            if isinstance(source_id, int) and 1 <= source_id <= len(original_batch):
+                base = original_batch[source_id - 1]
+            elif isinstance(source_id, str) and source_id.isdigit():
+                idx = int(source_id)
+                if 1 <= idx <= len(original_batch):
+                    base = original_batch[idx - 1]
+
+            if base is None:
+                title = str(item.get("title", "") or "").strip()
+                if title:
+                    for row in original_batch:
+                        if title == str(row.get("title", "") or "").strip():
+                            base = row
+                            break
+
+            if isinstance(base, dict):
+                item.setdefault("title", base.get("title", ""))
+                item.setdefault("url", base.get("url", ""))
+                item.setdefault("content", base.get("content", ""))
+
+            try:
+                cred = int(float(item.get("credibility_score", 0)))
+            except Exception:
+                cred = 0
+            item["credibility_score"] = max(0, min(10, cred))
+            item.pop("source_id", None)
+            hydrated.append(item)
+        return hydrated
+
+    def _post_filter_sources(self, sources: List[Dict[str, Any]], requirement: str) -> List[Dict[str, Any]]:
+        """Filter low-quality/non-focused sources before report generation."""
+        focus_entity = self._extract_focus_entity(requirement)
+        dedup: Dict[str, Dict[str, Any]] = {}
+
+        for source in sources:
+            if not isinstance(source, dict):
+                continue
+            item = dict(source)
+            url = self._normalize_source_url(str(item.get("url", "") or ""))
+            item["url"] = url
+
+            cred = int(item.get("credibility_score", 0) or 0)
+            if cred < 5:
+                continue
+            if self._is_redirect_source(url):
+                continue
+            if focus_entity and not self._matches_focus_entity(item, focus_entity) and cred < 8:
+                continue
+
+            key = url or str(item.get("title", "")).strip().lower()
+            if not key:
+                continue
+            prev = dedup.get(key)
+            if prev is None or int(item.get("credibility_score", 0)) > int(prev.get("credibility_score", 0)):
+                dedup[key] = item
+
+        return sorted(
+            dedup.values(),
+            key=lambda x: int(x.get("credibility_score", 0)),
+            reverse=True,
+        )
     
     def evaluate_and_clean(self, search_results: List[Dict[str, str]], requirement: str, batch_size: int = 5) -> Dict[str, Any]:
         """
@@ -285,6 +446,12 @@ class InformationCollector(BaseAgent):
         else:
             # 串行评估（原有逻辑）
             all_valid_sources = self._evaluate_batches_serial(batches, requirement)
+
+        raw_valid_count = len(all_valid_sources)
+        all_valid_sources = self._post_filter_sources(all_valid_sources, requirement)
+        filtered_out = raw_valid_count - len(all_valid_sources)
+        if filtered_out > 0:
+            print(f"  ℹ️ 后置质量过滤移除 {filtered_out} 条来源（保留 {len(all_valid_sources)} 条）")
         
         duration = time.time() - start_time
         
@@ -372,7 +539,7 @@ class InformationCollector(BaseAgent):
         """
         # 构建评估请求
         results_text = "\n\n".join([
-            f"来源 {i+1}:\n标题: {r.get('title', '无标题')}\nURL: {r.get('url', '无链接')}\n内容: {r.get('content', '无内容')[:config.CONTENT_EXTRACT_LENGTH]}"
+            f"来源 {i+1}:\nsource_id: {i+1}\n标题: {r.get('title', '无标题')}\nURL: {r.get('url', '无链接')}\n内容: {r.get('content', '无内容')[:config.CONTENT_EXTRACT_LENGTH]}"
             for i, r in enumerate(batch)
         ])
         
@@ -411,7 +578,7 @@ class InformationCollector(BaseAgent):
                 print(f"  [警告] valid_sources 不是列表类型，返回空结果")
                 return []
             
-            return valid_sources
+            return self._hydrate_valid_sources(valid_sources, original_batch)
         
         except json.JSONDecodeError as e:
             # 严格模式：JSON解析失败时不使用降级方案，直接返回空
@@ -446,29 +613,13 @@ class ReportWriter(BaseAgent):
         )
 
     def generate_report(self, requirement: str, analysis: Dict, cleaned_data: List) -> str:
-        """生成Markdown格式报告（优化版 - 精简输入数据）"""
+        """生成Markdown格式报告。"""
         print(f"\n{'='*60}")
         print(f"[步骤5] 报告撰写员正在生成Markdown报告...")
         print(f"{'='*60}")
-        
-        # 根据配置决定是否精简输入数据
-        if config.SIMPLIFY_REPORT_INPUT:
-            # 精简模式：只发送关键信息，大幅减少prompt长度
-            simplified_data = []
-            for item in cleaned_data[:20]:  # 最多使用20条
-                simplified_data.append({
-                    "title": item.get('title', '')[:100],  # 限制标题长度
-                    "url": item.get('url', ''),
-                    "key_data": item.get('data_found', '未指定')[:300],  # 只要关键数据，限制长度
-                    "score": item.get('credibility_score', 'N/A')
-                })
-            
-            data_str = json.dumps(simplified_data, ensure_ascii=False, indent=2)
-            print(f"  ℹ️  使用精简模式（{len(simplified_data)}条数据，约{len(data_str)}字符）")
-        else:
-            # 完整模式：发送所有数据
-            data_str = json.dumps(cleaned_data, ensure_ascii=False, indent=2)
-            print(f"  ℹ️  使用完整模式（{len(cleaned_data)}条数据，约{len(data_str)}字符）")
+
+        data_str = json.dumps(cleaned_data, ensure_ascii=False, indent=2)
+        print(f"  ℹ️  使用完整模式（{len(cleaned_data)}条数据，约{len(data_str)}字符）")
         
         # 简化需求分析结果
         simplified_analysis = {
@@ -483,14 +634,17 @@ class ReportWriter(BaseAgent):
 需求分析:
 {json.dumps(simplified_analysis, ensure_ascii=False, indent=2)}
 
-数据来源（{len(cleaned_data if not config.SIMPLIFY_REPORT_INPUT else simplified_data)}条）:
+数据来源（{len(cleaned_data)}条）:
 {data_str}
 
 请基于以上信息生成一份简洁而全面的研究报告。要求：
 1. Markdown格式
 2. 包含数据分析和趋势
 3. 标注数据来源
-4. 保持客观准确"""
+4. 保持客观准确
+5. 优先将高可信来源（公告/财报/交易所/主流财经媒体）作为核心证据，低可信来源只能作为情绪旁证
+6. 如果用户使用“最近/近期”等表述，默认按近90天组织主结论，并将更早数据放到背景部分
+7. 若不同来源数据冲突，必须明确写出“口径差异/时点差异”，结论使用区间或趋势判断，不强行单值"""
         
         prompt_length = len(user_message)
         print(f"  📊 Prompt长度: {prompt_length} 字符")

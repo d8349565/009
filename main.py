@@ -255,7 +255,12 @@ class ResearchAgentSystem:
             self.timer.end("步骤1-需求分析", {'keywords_count': len(analysis_result.get('search_keywords', []))})
             
             # 步骤2: 搜索策略（使用分析结果中的关键词）
-            search_keywords = analysis_result.get('search_keywords', [requirement])
+            search_keywords = (
+                analysis_result.get('search_keywords')
+                or analysis_result.get('keywords')
+                or analysis_result.get('key_concepts')
+                or [requirement]
+            )
             print(f"\n[步骤2] 搜索策略：全面了解主题")
             
             # 步骤3: 执行搜索
@@ -276,38 +281,22 @@ class ResearchAgentSystem:
                 'results_count': len(search_results)
             })
             
-            # 步骤4: 信息评估和清理（可选）
-            if config.SKIP_EVALUATION:
-                print(f"\n[步骤4] ⚡ 跳过信息评估（极速模式）")
-                # 直接使用搜索结果，转换为简化格式
-                cleaned_data = []
-                for idx, result in enumerate(search_results[:15], 1):  # 最多取15条
-                    cleaned_data.append({
-                        "title": result.get('title', '无标题'),
-                        "url": result.get('url', ''),
-                        "content_summary": result.get('content', '')[:300],
-                        "credibility_score": 7,  # 默认可信度
-                        "key_points": [],
-                        "data_found": "未评估"
-                    })
-                self.context['collected_data'] = cleaned_data
-                print(f"✓ 直接使用 {len(cleaned_data)} 条搜索结果")
-            else:
-                print(f"\n[步骤4] 评估信息可信度和相关性...")
-                self.timer.start("步骤4-信息评估", f"评估 {len(search_results)} 条搜索结果")
-                collection_context = f"原始需求: {requirement}\n"
-                
-                cleaned_result = self.information_collector.evaluate_and_clean(
-                    search_results, 
-                    collection_context
-                )
-                
-                # 提取有效来源列表
-                cleaned_data = cleaned_result.get('valid_sources', [])
-                self.context['collected_data'] = cleaned_data
-                self.timer.end("步骤4-信息评估", {'input_count': len(search_results), 'output_count': len(cleaned_data)})
-                
-                print(f"收集到有效数据: {len(cleaned_data)} 条")
+            # 步骤4: 信息评估和清理
+            print(f"\n[步骤4] 评估信息可信度和相关性...")
+            self.timer.start("步骤4-信息评估", f"评估 {len(search_results)} 条搜索结果")
+            collection_context = f"原始需求: {requirement}\n"
+            
+            cleaned_result = self.information_collector.evaluate_and_clean(
+                search_results, 
+                collection_context
+            )
+            
+            # 提取有效来源列表
+            cleaned_data = cleaned_result.get('valid_sources', [])
+            self.context['collected_data'] = cleaned_data
+            self.timer.end("步骤4-信息评估", {'input_count': len(search_results), 'output_count': len(cleaned_data)})
+            
+            print(f"收集到有效数据: {len(cleaned_data)} 条")
             
             # 步骤5: 生成报告
             print(f"\n[步骤5] 生成报告...")
@@ -353,6 +342,8 @@ class ResearchAgentSystem:
         Returns:
             最终生成的报告
         """
+        self.timer.start_total()
+
         print(f"\n{'='*60}")
         print(f"开始处理需求: {requirement}")
         print(f"时间: {beijing_now_str()}")
@@ -379,7 +370,12 @@ class ResearchAgentSystem:
                 # 步骤2: 确定搜索策略
                 if iteration == 1:
                     # 第一轮：基于需求分析的关键词搜索
-                    search_keywords = analysis_result.get('search_keywords', [requirement])
+                    search_keywords = (
+                        analysis_result.get('search_keywords')
+                        or analysis_result.get('keywords')
+                        or analysis_result.get('key_concepts')
+                        or [requirement]
+                    )
                     search_purpose = "全面了解主题"
                 else:
                     # 后续轮次：基于缺失方面生成搜索关键词
@@ -554,6 +550,8 @@ class ResearchAgentSystem:
                 print(f"  - {ln.get('keyword')} | engine={ln.get('engine')} | results={ln.get('results_count')} | duration={ln.get('duration')}")
         except Exception:
             pass
+
+        self.timer.end_total()
         
         # 在报告末尾添加搜索信息
         report_info = self._generate_report_info(iteration)
@@ -986,9 +984,6 @@ def main():
     # 从配置文件读取所有设置
     search_mode = config.SEARCH_MODE
     max_iterations = config.MAX_LOOP_COUNT
-    use_priority_sources = config.USE_PRIORITY_SOURCES
-    skip_evaluation = config.SKIP_EVALUATION
-    simplify_report = config.SIMPLIFY_REPORT_INPUT
     content_length = config.CONTENT_EXTRACT_LENGTH
     concurrent_evals = config.MAX_CONCURRENT_EVALUATIONS
     
@@ -1000,25 +995,19 @@ def main():
     print(f"搜索模式: {'快速搜索' if search_mode == 'quick' else '完整搜索'}")
     if search_mode == 'full':
         print(f"最大迭代次数: {max_iterations}")
-    print(f"优先搜索源: {'启用' if use_priority_sources else '禁用'}")
-    print(f"跳过评估: {'是 ⚡' if skip_evaluation else '否'}")
-    print(f"精简报告输入: {'是 ⚡' if simplify_report else '否'}")
     print(f"内容提取长度: {content_length} 字符 {'⚡' if content_length < 1000 else '📄' if content_length < 2500 else '📚'}")
     print(f"并发评估: {'串行' if concurrent_evals == 1 else f'{concurrent_evals}批并发 ⚡⚡' if concurrent_evals >= 3 else f'{concurrent_evals}批并发'}")
     
     # 性能提示
-    if skip_evaluation:
-        print(f"\n💡 已跳过评估，预计耗时: 10-15秒")
+    if concurrent_evals >= 3:
+        print(f"\n💡 使用并发评估（{concurrent_evals}批），大幅提速！预计耗时: 15-25秒")
     else:
-        if concurrent_evals >= 3:
-            print(f"\n💡 使用并发评估（{concurrent_evals}批），大幅提速！预计耗时: 15-25秒")
-        else:
-            print(f"\n💡 使用串行评估，预计耗时: 30-50秒")
-        
-        if content_length < 1000:
-            print(f"⚠️  内容提取长度较短，数据可能不完整")
-        elif content_length >= 2000:
-            print(f"✓ 内容提取长度适中，数据完整性良好")
+        print(f"\n💡 使用串行评估，预计耗时: 30-50秒")
+    
+    if content_length < 1000:
+        print(f"⚠️  内容提取长度较短，数据可能不完整")
+    elif content_length >= 2000:
+        print(f"✓ 内容提取长度适中，数据完整性良好")
     print(f"{'='*60}")
     
     # 显示模型配置
@@ -1026,9 +1015,6 @@ def main():
     
     # 创建系统实例
     system = ResearchAgentSystem(max_iterations=max_iterations)
-    
-    # 配置搜索引擎的优先搜索源
-    system.search_engine.enable_priority_sources(use_priority_sources)
     
     # 根据配置的模式选择处理方式
     if search_mode == 'quick':
