@@ -1,7 +1,6 @@
-"""
+﻿"""
 Agent基类和各种专业Agent实现
 """
-from openai import OpenAI
 import config
 import json
 import time
@@ -26,7 +25,8 @@ class BaseAgent:
                  use_reasoner: bool = False, 
                  system_datetime: str = None,
                  provider: Optional[str] = None,
-                 model: Optional[str] = None):
+                 model: Optional[str] = None,
+                 temperature: Optional[float] = None):
         """
         初始化Agent
         
@@ -46,15 +46,10 @@ class BaseAgent:
         # LLM提供商配置
         self.provider_name = provider or "deepseek"  # 默认使用DeepSeek
         self.model_name = model  # None表示自动选择
+        self.default_temperature = temperature
         self.llm_manager = get_llm_manager()
-        
-        # 向后兼容：保留原有的client（用于直接调用DeepSeek）
-        self.client = OpenAI(
-            api_key=config.DEEPSEEK_API_KEY,
-            base_url=config.DEEPSEEK_BASE_URL
-        )
     
-    def call_llm(self, user_message: str, temperature: float = 0.7) -> str:
+    def call_llm(self, user_message: str, temperature: Optional[float] = None) -> str:
         """
         调用LLM API（支持多提供商）
         
@@ -79,12 +74,14 @@ class BaseAgent:
             # 显示使用的提供商和模型
             provider = self.llm_manager.get_provider(self.provider_name)
             if not provider:
-                if config.LOG_LEVEL == 'verbose':
-                    print(f"  [{self.role}] 警告: 提供商 '{self.provider_name}' 不可用，回退到DeepSeek")
-                self.provider_name = "deepseek"
-                provider = self.llm_manager.get_provider("deepseek")
+                available = ", ".join(self.llm_manager.get_available_providers())
+                raise RuntimeError(
+                    f"Provider '{self.provider_name}' is not available for agent '{self.role}'. "
+                    f"Available providers: {available}"
+                )
             
             model_to_use = self.model_name or provider.get_model(self.use_reasoner)
+            effective_temperature = self.default_temperature if temperature is None else temperature
             
             # 根据日志级别决定输出详细程度
             if config.LOG_LEVEL == 'verbose':
@@ -103,16 +100,13 @@ class BaseAgent:
                 messages=messages,
                 model=model_to_use,
                 use_reasoner=self.use_reasoner,
-                temperature=temperature
+                temperature=effective_temperature
             )
             
-            # 处理返回结果（可能是字符串或元组）
-            if isinstance(result, tuple):
-                content, reasoning = result
-                if reasoning and config.LOG_LEVEL == 'verbose':
-                    print(f"  [思考过程] {reasoning[:200]}..." if len(reasoning) > 200 else f"  [思考过程] {reasoning}")
-            else:
-                content = result
+            content = result.content
+            reasoning = result.reasoning
+            if reasoning and config.LOG_LEVEL == 'verbose':
+                print(f"  [思考过程] {reasoning[:200]}..." if len(reasoning) > 200 else f"  [思考过程] {reasoning}")
             
             # 记录API调用耗时（仅verbose模式）
             api_duration = time.time() - api_start_time
@@ -121,8 +115,7 @@ class BaseAgent:
             
             return content
         except Exception as e:
-            print(f"❌ [{self.role}] API调用失败: {e}")
-            return ""
+            raise RuntimeError(f"[{self.role}] LLM call failed: {e}") from e
 
 
 class RequirementAnalyzer(BaseAgent):
@@ -132,13 +125,15 @@ class RequirementAnalyzer(BaseAgent):
         provider = provider or config.REQUIREMENT_ANALYZER_PROVIDER
         model = config.REQUIREMENT_ANALYZER_MODEL or None
         use_reasoner = config.REQUIREMENT_ANALYZER_USE_REASONER
+        temperature = config.REQUIREMENT_ANALYZER_TEMPERATURE
         super().__init__(
             "需求分析师", 
             REQUIREMENT_ANALYZER_PROMPT, 
             use_reasoner=use_reasoner,
             system_datetime=system_datetime,
             provider=provider,
-            model=model
+            model=model,
+            temperature=temperature,
         )
     
     def analyze(self, requirement: str) -> Dict[str, Any]:
@@ -148,7 +143,7 @@ class RequirementAnalyzer(BaseAgent):
         print(f"{'='*60}")
         
         start_time = time.time()
-        response = self.call_llm(f"用户需求：{requirement}", temperature=0.3)
+        response = self.call_llm(f"用户需求：{requirement}")
         duration = time.time() - start_time
         
         print(f"  [需求分析师] API调用耗时: {duration:.2f}秒")
@@ -242,13 +237,15 @@ class InformationCollector(BaseAgent):
         provider = provider or config.INFORMATION_COLLECTOR_PROVIDER
         model = config.INFORMATION_COLLECTOR_MODEL or None
         use_reasoner = config.INFORMATION_COLLECTOR_USE_REASONER
+        temperature = config.INFORMATION_COLLECTOR_TEMPERATURE
         super().__init__(
             "信息收集员", 
             INFORMATION_COLLECTOR_PROMPT, 
             use_reasoner=use_reasoner,
             system_datetime=system_datetime,
             provider=provider,
-            model=model
+            model=model,
+            temperature=temperature,
         )
     
     def evaluate_and_clean(self, search_results: List[Dict[str, str]], requirement: str, batch_size: int = 5) -> Dict[str, Any]:
@@ -386,7 +383,7 @@ class InformationCollector(BaseAgent):
 
 请仔细评估这些信息的有效性和可信度，提取关键数据。注意：只返回JSON格式，无需其他说明。"""
         
-        response = self.call_llm(user_message, temperature=0.2)
+        response = self.call_llm(user_message)
         return self._parse_evaluation_response(response, batch)
     
     def _parse_evaluation_response(self, response: str, original_batch: List[Dict[str, str]]) -> List[Dict[str, Any]]:
@@ -437,13 +434,15 @@ class ReportWriter(BaseAgent):
         provider = provider or config.REPORT_WRITER_PROVIDER
         model = config.REPORT_WRITER_MODEL or None
         use_reasoner = config.REPORT_WRITER_USE_REASONER
+        temperature = config.REPORT_WRITER_TEMPERATURE
         super().__init__(
             "报告撰写员", 
             REPORT_WRITER_PROMPT, 
             use_reasoner=use_reasoner,
             system_datetime=system_datetime,
             provider=provider,
-            model=model
+            model=model,
+            temperature=temperature,
         )
 
     def generate_report(self, requirement: str, analysis: Dict, cleaned_data: List) -> str:
@@ -497,7 +496,7 @@ class ReportWriter(BaseAgent):
         print(f"  📊 Prompt长度: {prompt_length} 字符")
         
         report_start = time.time()
-        report = self.call_llm(user_message, temperature=0.5)
+        report = self.call_llm(user_message)
         report_duration = time.time() - report_start
         
         print(f"\n✓ 报告生成完成！（耗时: {report_duration:.2f}秒）")
@@ -511,13 +510,15 @@ class QualityJudge(BaseAgent):
         provider = provider or config.QUALITY_JUDGE_PROVIDER
         model = config.QUALITY_JUDGE_MODEL or None
         use_reasoner = config.QUALITY_JUDGE_USE_REASONER
+        temperature = config.QUALITY_JUDGE_TEMPERATURE
         super().__init__(
             "质量评审员", 
             QUALITY_JUDGE_PROMPT, 
             use_reasoner=use_reasoner,
             system_datetime=system_datetime,
             provider=provider,
-            model=model
+            model=model,
+            temperature=temperature,
         )
     
     def judge(self, requirement: str, report: str, iteration: int) -> Dict[str, Any]:
@@ -535,7 +536,7 @@ class QualityJudge(BaseAgent):
 
 请评估这份报告是否充分满足用户需求。"""
         
-        response = self.call_llm(user_message, temperature=0.2)
+        response = self.call_llm(user_message)
         
         try:
             # 尝试提取JSON
@@ -575,13 +576,15 @@ class ComprehensiveReportWriter(BaseAgent):
         provider = provider or config.COMPREHENSIVE_REPORT_WRITER_PROVIDER
         model = config.COMPREHENSIVE_REPORT_WRITER_MODEL or None
         use_reasoner = config.COMPREHENSIVE_REPORT_WRITER_USE_REASONER
+        temperature = config.COMPREHENSIVE_REPORT_WRITER_TEMPERATURE
         super().__init__(
             role="综合报告撰写员",
             system_prompt=COMPREHENSIVE_REPORT_WRITER_PROMPT,
             use_reasoner=use_reasoner,
             system_datetime=system_datetime,
             provider=provider,
-            model=model
+            model=model,
+            temperature=temperature,
         )
     
     def analyze_and_integrate(self, 
@@ -653,7 +656,7 @@ class ComprehensiveReportWriter(BaseAgent):
 **必须返回完整的JSON结构（见系统提示词）**
 """
         
-        response = self.call_llm(user_message, temperature=0.3)
+        response = self.call_llm(user_message)
         
         # 解析JSON响应
         try:

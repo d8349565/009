@@ -1,4 +1,4 @@
-# 🔬 AI研究报告生成系统 (AI Research Report Generator)
+﻿# 🔬 AI研究报告生成系统 (AI Research Report Generator)
 
 一个基于 DeepSeek 等大模型的智能信息研究和报告生成系统的 Windows 桌面应用。它能够自动搜索、分析、整理信息，并生成结构化的专业研究报告。
 
@@ -83,7 +83,7 @@ python gui_app.py
 ├── document_parser.py         # 文档解析器
 ├── reports/                   # 报告生成目录 (.md, .json)
 ├── config.py                  # 配置加载
-└── model_config.json          # 模型预设配置
+└── config/runtime.json        # 运行时配置（providers/agents）
 ```
 
 ---

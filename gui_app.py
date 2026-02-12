@@ -1,4 +1,4 @@
-"""
+﻿"""
 AI研究报告生成系统 - wxPython GUI界面
 """
 import wx
@@ -17,7 +17,7 @@ from time_utils import beijing_now_str
 from main import ResearchAgentSystem
 import config
 from agent_config import get_active_agent_config
-from runtime_config import load_runtime_config, save_runtime_config
+from runtime_config import load_runtime_config, save_runtime_config, get_runtime_config_path
 
 
 class LogRedirector:
@@ -711,13 +711,13 @@ class ConfigPanel(wx.Panel):
         info_text = wx.StaticText(
             panel, 
             label="为每个Agent配置使用的AI模型供应商和具体模型。配置会保存到 .env 文件。\n"
-                  "💡 提示：可以编辑 model_config.json 文件来添加新的供应商和模型。"
+                  "💡 提示：可以编辑 config/runtime.json 文件来添加新的供应商和模型。"
         )
         info_text.Wrap(600)
         info_sizer.Add(info_text, 0, wx.ALL, 5)
         
         # 编辑配置文件按钮
-        edit_btn = wx.Button(panel, label="📝 编辑模型配置文件 (model_config.json)")
+        edit_btn = wx.Button(panel, label="📝 编辑运行时配置文件 (config/runtime.json)")
         edit_btn.Bind(wx.EVT_BUTTON, self.on_edit_model_config)
         info_sizer.Add(edit_btn, 0, wx.ALL, 5)
         
@@ -728,6 +728,13 @@ class ConfigPanel(wx.Panel):
         
         # Agent配置
         self.agent_configs = {}
+        self.default_agent_temperatures = {
+            "requirement_analyzer": float(config.REQUIREMENT_ANALYZER_TEMPERATURE),
+            "information_collector": float(config.INFORMATION_COLLECTOR_TEMPERATURE),
+            "report_writer": float(config.REPORT_WRITER_TEMPERATURE),
+            "quality_judge": float(config.QUALITY_JUDGE_TEMPERATURE),
+            "comprehensive_report_writer": float(config.COMPREHENSIVE_REPORT_WRITER_TEMPERATURE),
+        }
         agent_names = {
             "requirement_analyzer": "需求分析师 (Requirement Analyzer)",
             "information_collector": "信息收集员 (Information Collector)",
@@ -774,6 +781,16 @@ class ConfigPanel(wx.Panel):
             # 推理模式
             reasoner_checkbox = wx.CheckBox(panel, label="✓ 启用推理模式 (deepseek-reasoner 或类似)")
             box_sizer.Add(reasoner_checkbox, 0, wx.ALL, 5)
+
+            # 温度参数
+            temperature_sizer = wx.BoxSizer(wx.HORIZONTAL)
+            temperature_sizer.Add(wx.StaticText(panel, label="温度 Temperature:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 5)
+            temperature_ctrl = wx.SpinCtrlDouble(panel, min=0.0, max=2.0, initial=0.7, inc=0.1)
+            temperature_ctrl.SetDigits(2)
+            temperature_ctrl.SetValue(self.default_agent_temperatures.get(agent_key, 0.7))
+            temperature_ctrl.SetMinSize((100, -1))
+            temperature_sizer.Add(temperature_ctrl, 0)
+            box_sizer.Add(temperature_sizer, 0, wx.ALL, 5)
             
             sizer.Add(box_sizer, 0, wx.EXPAND | wx.ALL, 10)
             
@@ -783,7 +800,8 @@ class ConfigPanel(wx.Panel):
                 'model': model_choice,
                 'custom_input': custom_input,
                 'custom_sizer': custom_sizer,
-                'reasoner': reasoner_checkbox
+                'reasoner': reasoner_checkbox,
+                'temperature': temperature_ctrl
             }
             
             # 绑定供应商变化事件
@@ -793,83 +811,122 @@ class ConfigPanel(wx.Panel):
         return panel
     
     def load_model_config(self):
-        """从JSON文件加载模型配置"""
-        config_file = Path('model_config.json')
-        
-        # 默认配置（如果文件不存在）
+        """从 runtime.json 的 providers 字段加载模型选项。"""
         default_config = {
-            'deepseek': ['deepseek-chat', 'deepseek-reasoner'],
-            'glm': ['glm-4-flash', 'glm-4-plus', 'glm-4-air', 'glm-4-airx', 'glm-4-long'],
-            'zhipu': ['glm-4-flash', 'glm-4-plus', 'glm-4-air', 'glm-4-airx', 'glm-4-long'],
-            'openrouter': [
-                'anthropic/claude-3.5-sonnet',
-                'openai/gpt-4o',
-                'openai/gpt-4o-mini',
-                'google/gemini-pro-1.5',
-                'meta-llama/llama-3.1-70b-instruct',
-                'qwen/qwen-2.5-72b-instruct',
-                'deepseek/deepseek-chat',
-                'anthropic/claude-3-opus',
-                'xiaomi/mimo-v2-flash:free',
-                'z-ai/glm-4.5-air:free',
-                'custom'
-            ]
+            "deepseek": ["deepseek-chat", "deepseek-reasoner"],
+            "glm": ["glm-4-flash", "glm-4-plus", "glm-4-air", "glm-4-airx", "glm-4-long"],
+            "zhipu": ["glm-4-flash", "glm-4-plus", "glm-4-air", "glm-4-airx", "glm-4-long"],
+            "openrouter": [
+                "anthropic/claude-3.5-sonnet",
+                "openai/gpt-4o",
+                "openai/gpt-4o-mini",
+                "google/gemini-pro-1.5",
+                "meta-llama/llama-3.1-70b-instruct",
+                "qwen/qwen-2.5-72b-instruct",
+                "deepseek/deepseek-chat",
+                "anthropic/claude-3-opus",
+                "xiaomi/mimo-v2-flash:free",
+                "z-ai/glm-4.5-air:free",
+            ],
         }
-        
+
+        self.model_options = {}
+        self.model_descriptions = {}
+
         try:
-            if config_file.exists():
-                with open(config_file, 'r', encoding='utf-8') as f:
-                    config_data = json.load(f)
-                
-                # 解析JSON格式
-                self.model_options = {}
-                self.model_descriptions = {}  # 保存描述信息
-                
-                for provider, data in config_data.items():
-                    if provider.startswith('_'):  # 跳过注释
+            runtime_cfg = load_runtime_config()
+            providers_cfg = runtime_cfg.get("providers", {}) if isinstance(runtime_cfg, dict) else {}
+            providers_cfg = providers_cfg if isinstance(providers_cfg, dict) else {}
+
+            if providers_cfg:
+                for provider, provider_cfg in providers_cfg.items():
+                    if not isinstance(provider_cfg, dict):
                         continue
-                    
+
                     models = []
                     descriptions = {}
-                    
-                    for model in data.get('models', []):
-                        model_id = model.get('id', '')
-                        model_name = model.get('name', model_id)
-                        model_desc = model.get('description', '')
-                        
-                        models.append(f"{model_name}")
-                        descriptions[model_name] = {
-                            'id': model_id,
-                            'description': model_desc
-                        }
-                    
+                    models_cfg = provider_cfg.get("models", [])
+                    if isinstance(models_cfg, list) and models_cfg:
+                        for model_item in models_cfg:
+                            if isinstance(model_item, dict):
+                                model_id = str(model_item.get("id", "")).strip()
+                                model_name = str(model_item.get("name", "")).strip() or model_id
+                                model_desc = str(model_item.get("description", "")).strip()
+                            else:
+                                model_id = str(model_item).strip()
+                                model_name = model_id
+                                model_desc = ""
+
+                            if not model_id and not model_name:
+                                continue
+
+                            display_name = "自定义模型..." if (model_id or model_name).lower() == "custom" else model_name
+                            models.append(display_name)
+                            descriptions[display_name] = {
+                                "id": model_id or model_name,
+                                "description": model_desc,
+                            }
+                    else:
+                        fallback_models = list(default_config.get(provider, []))
+                        for model_id in fallback_models:
+                            models.append(model_id)
+                            descriptions[model_id] = {"id": model_id, "description": ""}
+
+                    if "自定义模型..." not in models:
+                        models.append("自定义模型...")
+                        descriptions["自定义模型..."] = {"id": "custom", "description": "手动输入模型 ID"}
+
                     self.model_options[provider] = models
                     self.model_descriptions[provider] = descriptions
-                
-                print(f"✓ 已从 model_config.json 加载 {len(self.model_options)} 个供应商的模型配置")
+
+                    aliases = provider_cfg.get("aliases", [])
+                    if not isinstance(aliases, list):
+                        aliases = []
+                    if provider == "zhipu" and "glm" not in aliases:
+                        aliases = aliases + ["glm"]
+                    for alias in aliases:
+                        alias_key = str(alias).strip()
+                        if not alias_key or alias_key in self.model_options:
+                            continue
+                        self.model_options[alias_key] = list(models)
+                        self.model_descriptions[alias_key] = dict(descriptions)
             else:
-                print("⚠ model_config.json 不存在，使用默认配置")
-                self.model_options = default_config
-                self.model_descriptions = {}
-                
+                for provider, models in default_config.items():
+                    model_list = list(models)
+                    if "自定义模型..." not in model_list:
+                        model_list.append("自定义模型...")
+                    self.model_options[provider] = model_list
+                    self.model_descriptions[provider] = {
+                        model_name: {"id": model_name if model_name != "自定义模型..." else "custom", "description": ""}
+                        for model_name in model_list
+                    }
+
+            print(f"✓ 已从 runtime.json 加载 {len(self.model_options)} 个供应商的模型配置")
         except Exception as e:
-            print(f"⚠ 加载 model_config.json 失败: {e}，使用默认配置")
-            self.model_options = default_config
-            self.model_descriptions = {}
+            print(f"⚠ 加载 runtime.json 失败: {e}，使用默认配置")
+            for provider, models in default_config.items():
+                model_list = list(models)
+                if "自定义模型..." not in model_list:
+                    model_list.append("自定义模型...")
+                self.model_options[provider] = model_list
+                self.model_descriptions[provider] = {
+                    model_name: {"id": model_name if model_name != "自定义模型..." else "custom", "description": ""}
+                    for model_name in model_list
+                }
     
     def on_edit_model_config(self, event):
-        """编辑模型配置文件"""
-        config_file = Path('model_config.json')
+        """编辑运行时配置文件。"""
+        config_file = get_runtime_config_path()
         if config_file.exists():
             os.startfile(config_file)
             wx.MessageBox(
-                "已打开 model_config.json 文件。\n\n"
+                f"已打开 {config_file} 文件。\n\n"
                 "编辑完成后保存，然后点击「重新加载」按钮应用更改。",
                 "提示",
                 wx.OK | wx.ICON_INFORMATION
             )
         else:
-            wx.MessageBox("model_config.json 文件不存在！", "错误", wx.OK | wx.ICON_ERROR)
+            wx.MessageBox(f"{config_file} 文件不存在！", "错误", wx.OK | wx.ICON_ERROR)
     
     def on_provider_changed(self, event, agent_key):
         """供应商变化时更新模型列表"""
@@ -1054,7 +1111,9 @@ class ConfigPanel(wx.Panel):
                     provider = cfg.get('provider', 'deepseek')
                     
                     # 设置供应商
-                    controls['provider'].SetStringSelection(provider)
+                    selected = controls['provider'].SetStringSelection(provider)
+                    if not selected and controls['provider'].GetCount() > 0:
+                        controls['provider'].SetSelection(0)
                     
                     # 触发供应商变化，更新模型列表
                     self.on_provider_changed(None, agent_key)
@@ -1075,6 +1134,11 @@ class ConfigPanel(wx.Panel):
                     
                     # 设置推理模式
                     controls['reasoner'].SetValue(cfg.get('use_reasoner', False))
+                    temp_value = cfg.get('temperature', self.default_agent_temperatures.get(agent_key, 0.7))
+                    try:
+                        controls['temperature'].SetValue(float(temp_value))
+                    except (TypeError, ValueError):
+                        controls['temperature'].SetValue(self.default_agent_temperatures.get(agent_key, 0.7))
                     
         except Exception as e:
             wx.MessageBox(f"加载配置失败：{e}", "错误", wx.OK | wx.ICON_ERROR)
@@ -1137,6 +1201,7 @@ class ConfigPanel(wx.Panel):
                             model = model_choice
                 
                 use_reasoner = controls['reasoner'].GetValue()
+                temperature = float(controls['temperature'].GetValue())
 
                 existing_agent_cfg = agents_section.get(agent_key, {})
                 if not isinstance(existing_agent_cfg, dict):
@@ -1144,6 +1209,7 @@ class ConfigPanel(wx.Panel):
                 existing_agent_cfg["provider"] = provider or "deepseek"
                 existing_agent_cfg["model"] = model or ""
                 existing_agent_cfg["use_reasoner"] = bool(use_reasoner)
+                existing_agent_cfg["temperature"] = round(temperature, 2)
                 agents_section[agent_key] = existing_agent_cfg
             
             # API Keys
@@ -1193,7 +1259,7 @@ class ConfigPanel(wx.Panel):
         
         wx.MessageBox(
             "配置已重新加载！\n\n"
-            "✓ 模型配置 (model_config.json)\n"
+            "✓ 模型配置 (config/runtime.json)\n"
             "✓ 环境变量 (.env)\n"
             "✓ 搜索配置",
             "重新加载成功",
@@ -1222,6 +1288,7 @@ class ConfigPanel(wx.Panel):
                 controls['custom_input'].SetValue('')
                 controls['custom_input'].Show(False)
                 controls['reasoner'].SetValue(False)
+                controls['temperature'].SetValue(self.default_agent_temperatures.get(agent_key, 0.7))
             
             # 重置其他配置
             self.searxng_url.SetValue('http://localhost:8080')

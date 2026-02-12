@@ -1,4 +1,4 @@
-"""
+﻿"""
 信息整理Agent系统 - 主程序
 """
 from agents import (RequirementAnalyzer, InformationCollector, ReportWriter, 
@@ -13,6 +13,7 @@ import json
 import os
 from typing import Dict, List, Any, Optional
 from time_utils import beijing_now_str
+from llm_providers import get_llm_manager
 
 
 def print_model_configuration():
@@ -72,6 +73,42 @@ def print_model_configuration():
         print(f"⚠️  无法加载模型配置: {e}")
         print("使用默认配置继续...\n")
         return None
+
+
+def validate_provider_configuration() -> bool:
+    """校验当前 Agent 配置引用的 provider 是否可用。"""
+    try:
+        from agent_config import get_active_agent_config
+
+        manager = get_llm_manager()
+        available = manager.get_available_providers()
+        if not available:
+            print("错误: 未检测到任何可用 LLM 提供商。")
+            print("请在 .env 中至少配置一个 API Key（DEEPSEEK_API_KEY / ZHIPU_API_KEY / OPENROUTER_API_KEY）。")
+            return False
+
+        active_cfg = get_active_agent_config()
+        required = sorted(
+            {
+                str(settings.get("provider", "")).strip().lower()
+                for settings in active_cfg.values()
+                if isinstance(settings, dict) and str(settings.get("provider", "")).strip()
+            }
+        )
+
+        missing = [provider for provider in required if not manager.has_provider(provider)]
+        if missing:
+            print("错误: 当前 Agent 配置中存在不可用的提供商：")
+            for provider in missing:
+                print(f"  - {provider}")
+            print(f"当前可用提供商: {', '.join(available)}")
+            print("请调整 runtime.json/.env 中的 provider 配置后重试。")
+            return False
+
+        return True
+    except Exception as e:
+        print(f"错误: 提供商配置校验失败: {e}")
+        return False
 
 
 class ResearchAgentSystem:
@@ -873,11 +910,26 @@ class ResearchAgentSystem:
         else:
             info_lines.append("无")
         
+        try:
+            from agent_config import get_active_agent_config
+
+            active_cfg = get_active_agent_config()
+            provider_summary = []
+            for agent_key, settings in active_cfg.items():
+                if not isinstance(settings, dict):
+                    continue
+                provider = str(settings.get("provider", "")).strip() or "unknown"
+                model = str(settings.get("model", "")).strip() or "auto"
+                provider_summary.append(f"{agent_key}:{provider}/{model}")
+            ai_model_summary = "; ".join(provider_summary) if provider_summary else "N/A"
+        except Exception:
+            ai_model_summary = "N/A"
+
         info_lines.extend([
             "",
             "### 系统配置",
             "",
-            f"- AI模型: DeepSeek (推理模式)",
+            f"- AI模型: {ai_model_summary}",
             f"- 系统时间: {self.system_datetime}",
             ""
         ])
@@ -887,11 +939,8 @@ class ResearchAgentSystem:
 
 def main():
     """主函数"""
-    # 检查配置
-    if not config.DEEPSEEK_API_KEY:
-        print("错误: 请在 .env 文件中配置 DEEPSEEK_API_KEY")
-        print("1. 复制 .env.example 为 .env")
-        print("2. 在 .env 中填入你的 DeepSeek API 密钥")
+    # 检查 provider 配置
+    if not validate_provider_configuration():
         return
     
     # 选择运行模式

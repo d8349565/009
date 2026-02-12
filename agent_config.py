@@ -13,10 +13,36 @@ AGENT_ENV_PREFIX = {
 }
 
 
+def _default_provider(runtime: Dict[str, Any]) -> str:
+    env_default = (os.getenv("DEFAULT_LLM_PROVIDER") or "").strip().lower()
+    if env_default:
+        return env_default
+
+    providers_cfg = runtime.get("providers", {}) if isinstance(runtime, dict) else {}
+    if isinstance(providers_cfg, dict) and providers_cfg:
+        for provider_name, provider_spec in providers_cfg.items():
+            if not isinstance(provider_spec, dict):
+                continue
+            api_key_env = provider_spec.get("api_key_env") or f"{str(provider_name).upper()}_API_KEY"
+            if isinstance(api_key_env, str) and os.getenv(api_key_env, "").strip():
+                return str(provider_name).strip().lower()
+        first_key = next(iter(providers_cfg.keys()))
+        return str(first_key).strip().lower()
+
+    if os.getenv("DEEPSEEK_API_KEY", "").strip():
+        return "deepseek"
+    if os.getenv("ZHIPU_API_KEY", "").strip():
+        return "zhipu"
+    if os.getenv("OPENROUTER_API_KEY", "").strip():
+        return "openrouter"
+    return "deepseek"
+
+
 def get_active_agent_config() -> Dict[str, Dict[str, Any]]:
     runtime = load_runtime_config()
     agents_cfg = runtime.get("agents") if isinstance(runtime, dict) else {}
     agents_cfg = agents_cfg if isinstance(agents_cfg, dict) else {}
+    fallback_provider = _default_provider(runtime)
 
     final_config: Dict[str, Dict[str, Any]] = {}
     for agent_key, env_prefix in AGENT_ENV_PREFIX.items():
@@ -25,8 +51,9 @@ def get_active_agent_config() -> Dict[str, Dict[str, Any]]:
         env_provider = os.getenv(f"{env_prefix}_PROVIDER")
         env_model = os.getenv(f"{env_prefix}_MODEL")
         env_use_reasoner = os.getenv(f"{env_prefix}_USE_REASONER")
+        env_temperature = os.getenv(f"{env_prefix}_TEMPERATURE")
 
-        provider = (env_provider or base.get("provider") or "deepseek").strip()
+        provider = (env_provider or base.get("provider") or fallback_provider).strip()
         model = (env_model or base.get("model") or "").strip()
         use_reasoner = parse_bool(env_use_reasoner, bool(base.get("use_reasoner", False)))
 
@@ -35,6 +62,11 @@ def get_active_agent_config() -> Dict[str, Dict[str, Any]]:
             temperature_value = float(temperature)
         else:
             temperature_value = None
+        if env_temperature is not None:
+            try:
+                temperature_value = float(env_temperature)
+            except (TypeError, ValueError):
+                pass
 
         final_config[agent_key] = {
             "provider": provider,

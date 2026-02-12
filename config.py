@@ -37,6 +37,31 @@ def _runtime_agent(agent_key: str) -> dict:
     return agent_cfg if isinstance(agent_cfg, dict) else {}
 
 
+def _default_provider() -> str:
+    env_default = (os.getenv("DEFAULT_LLM_PROVIDER") or "").strip().lower()
+    if env_default:
+        return env_default
+
+    providers_cfg = get_nested(RUNTIME_CONFIG, ["providers"], {}) or {}
+    if isinstance(providers_cfg, dict) and providers_cfg:
+        for provider_name, provider_spec in providers_cfg.items():
+            if not isinstance(provider_spec, dict):
+                continue
+            api_key_env = provider_spec.get("api_key_env") or f"{str(provider_name).upper()}_API_KEY"
+            if isinstance(api_key_env, str) and os.getenv(api_key_env, "").strip():
+                return str(provider_name).strip().lower()
+        first_key = next(iter(providers_cfg.keys()))
+        return str(first_key).strip().lower()
+
+    if os.getenv("DEEPSEEK_API_KEY", "").strip():
+        return "deepseek"
+    if os.getenv("ZHIPU_API_KEY", "").strip():
+        return "zhipu"
+    if os.getenv("OPENROUTER_API_KEY", "").strip():
+        return "openrouter"
+    return "deepseek"
+
+
 def _agent_provider(agent_key: str, env_prefix: str, default: str = "deepseek") -> str:
     base = _runtime_agent(agent_key).get("provider") or default
     return (os.getenv(f"{env_prefix}_PROVIDER") or base or default).strip()
@@ -52,25 +77,48 @@ def _agent_use_reasoner(agent_key: str, env_prefix: str, default: bool = False) 
     return parse_bool(os.getenv(f"{env_prefix}_USE_REASONER"), base)
 
 
-REQUIREMENT_ANALYZER_PROVIDER = _agent_provider("requirement_analyzer", "REQUIREMENT_ANALYZER", "deepseek")
+def _agent_temperature(agent_key: str, env_prefix: str, default: float) -> float:
+    base = _runtime_agent(agent_key).get("temperature", default)
+    try:
+        base_value = float(base)
+    except (TypeError, ValueError):
+        base_value = float(default)
+
+    env_value = os.getenv(f"{env_prefix}_TEMPERATURE")
+    if env_value is None:
+        return base_value
+    try:
+        return float(env_value)
+    except (TypeError, ValueError):
+        return base_value
+
+
+_DEFAULT_AGENT_PROVIDER = _default_provider()
+
+REQUIREMENT_ANALYZER_PROVIDER = _agent_provider("requirement_analyzer", "REQUIREMENT_ANALYZER", _DEFAULT_AGENT_PROVIDER)
 REQUIREMENT_ANALYZER_MODEL = _agent_model("requirement_analyzer", "REQUIREMENT_ANALYZER", "")
 REQUIREMENT_ANALYZER_USE_REASONER = _agent_use_reasoner("requirement_analyzer", "REQUIREMENT_ANALYZER", False)
+REQUIREMENT_ANALYZER_TEMPERATURE = _agent_temperature("requirement_analyzer", "REQUIREMENT_ANALYZER", 0.3)
 
-INFORMATION_COLLECTOR_PROVIDER = _agent_provider("information_collector", "INFORMATION_COLLECTOR", "deepseek")
+INFORMATION_COLLECTOR_PROVIDER = _agent_provider("information_collector", "INFORMATION_COLLECTOR", _DEFAULT_AGENT_PROVIDER)
 INFORMATION_COLLECTOR_MODEL = _agent_model("information_collector", "INFORMATION_COLLECTOR", "")
 INFORMATION_COLLECTOR_USE_REASONER = _agent_use_reasoner("information_collector", "INFORMATION_COLLECTOR", False)
+INFORMATION_COLLECTOR_TEMPERATURE = _agent_temperature("information_collector", "INFORMATION_COLLECTOR", 0.2)
 
-REPORT_WRITER_PROVIDER = _agent_provider("report_writer", "REPORT_WRITER", "deepseek")
+REPORT_WRITER_PROVIDER = _agent_provider("report_writer", "REPORT_WRITER", _DEFAULT_AGENT_PROVIDER)
 REPORT_WRITER_MODEL = _agent_model("report_writer", "REPORT_WRITER", "")
 REPORT_WRITER_USE_REASONER = _agent_use_reasoner("report_writer", "REPORT_WRITER", True)
+REPORT_WRITER_TEMPERATURE = _agent_temperature("report_writer", "REPORT_WRITER", 0.5)
 
-QUALITY_JUDGE_PROVIDER = _agent_provider("quality_judge", "QUALITY_JUDGE", "deepseek")
+QUALITY_JUDGE_PROVIDER = _agent_provider("quality_judge", "QUALITY_JUDGE", _DEFAULT_AGENT_PROVIDER)
 QUALITY_JUDGE_MODEL = _agent_model("quality_judge", "QUALITY_JUDGE", "")
 QUALITY_JUDGE_USE_REASONER = _agent_use_reasoner("quality_judge", "QUALITY_JUDGE", False)
+QUALITY_JUDGE_TEMPERATURE = _agent_temperature("quality_judge", "QUALITY_JUDGE", 0.2)
 
-COMPREHENSIVE_REPORT_WRITER_PROVIDER = _agent_provider("comprehensive_report_writer", "COMPREHENSIVE_REPORT_WRITER", "deepseek")
+COMPREHENSIVE_REPORT_WRITER_PROVIDER = _agent_provider("comprehensive_report_writer", "COMPREHENSIVE_REPORT_WRITER", _DEFAULT_AGENT_PROVIDER)
 COMPREHENSIVE_REPORT_WRITER_MODEL = _agent_model("comprehensive_report_writer", "COMPREHENSIVE_REPORT_WRITER", "")
 COMPREHENSIVE_REPORT_WRITER_USE_REASONER = _agent_use_reasoner("comprehensive_report_writer", "COMPREHENSIVE_REPORT_WRITER", True)
+COMPREHENSIVE_REPORT_WRITER_TEMPERATURE = _agent_temperature("comprehensive_report_writer", "COMPREHENSIVE_REPORT_WRITER", 0.3)
 
 _runtime_search = get_nested(RUNTIME_CONFIG, ["search"], {}) or {}
 if not isinstance(_runtime_search, dict):
