@@ -55,10 +55,17 @@ class SearchEngine:
         self._content_cache: Dict[str, str] = {}
         self._content_cache_lock = threading.Lock()
         self._content_max_length = max(0, config.CONTENT_EXTRACT_LENGTH)
+        self._content_timeout = max(3, min(self.timeout, 6))
         self._retry_total = max(0, config.FETCH_RETRY_TOTAL)
         self._backoff_factor = max(0.0, config.FETCH_BACKOFF_FACTOR)
         self.session = requests.Session()
         self.session.headers.update(self.headers)
+        # A separate session for page-content fetching to avoid retry-amplified stalls.
+        self.fetch_session = requests.Session()
+        self.fetch_session.headers.update(self.headers)
+        no_retry_adapter = HTTPAdapter(max_retries=Retry(total=0))
+        self.fetch_session.mount("http://", no_retry_adapter)
+        self.fetch_session.mount("https://", no_retry_adapter)
         self._setup_session()
 
         self._thread_ctx = threading.local()
@@ -326,7 +333,9 @@ class SearchEngine:
         if not candidates:
             return
 
-        max_workers = min(6, max(1, len(candidates)))
+        total_candidates = len(candidates)
+        max_workers = min(8, max(1, total_candidates))
+        print(f"  -> fetching content for {total_candidates} candidates with {max_workers} workers")
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_idx = {}
             for idx, item in candidates:
@@ -335,6 +344,8 @@ class SearchEngine:
                 future = executor.submit(self._fetch_for_result, keyword, url)
                 future_to_idx[future] = idx
 
+            completed = 0
+            upgraded = 0
             for future in as_completed(future_to_idx):
                 idx = future_to_idx[future]
                 try:
@@ -343,6 +354,10 @@ class SearchEngine:
                     full_content = ""
                 if full_content and len(full_content) > len(results[idx].get("content", "") or ""):
                     results[idx]["content"] = full_content
+                    upgraded += 1
+                completed += 1
+                if completed % 5 == 0 or completed == total_candidates:
+                    print(f"     progress: {completed}/{total_candidates} (upgraded {upgraded})")
 
     def search(self, keywords: List[str]) -> List[Dict[str, str]]:
         """
@@ -412,7 +427,11 @@ class SearchEngine:
         # 1) pre-select by score/snippet
         # 2) fetch full content only for selected candidates
         target_max = max(1, self.max_results)
-        fetch_budget = min(len(all_results), max(6, int(len(all_results) * 0.6)))
+        # Hard-cap full-content fetch volume to avoid long stalls on slow domains.
+        fetch_budget = min(
+            len(all_results),
+            min(20, max(8, int(target_max * 0.6)))
+        )
         fetch_candidates = self._smart_select_results(all_results, fetch_budget)
         if fetch_candidates:
             print(f"  -> preselected {len(fetch_candidates)} results; fetching full content only for this set...")
@@ -702,7 +721,7 @@ class SearchEngine:
 
         content = ""
         try:
-            response = self.session.get(url, headers=self.headers, timeout=self.timeout)
+            response = self.fetch_session.get(url, headers=self.headers, timeout=self._content_timeout)
             if response.status_code in (403, 429):
                 keyword = self._get_current_keyword() or "(未知关键词)"
                 self._record_fetch_failure(keyword, url, "HTTP_403_429", str(response.status_code))
