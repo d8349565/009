@@ -1042,16 +1042,21 @@ class ConfigTab(QWidget):
                 f.write("\n".join(env_lines))
 
             if save_ok:
-                QMessageBox.information(self, "保存成功", "配置已保存到 runtime.json 与 .env！\n需要重启应用才能生效。")
+                self._do_reload()
+                QMessageBox.information(self, "保存成功", "配置已保存并自动重新加载！\n\n✓ runtime.json\n✓ .env\n✓ 搜索配置")
             else:
                 QMessageBox.warning(self, "保存部分成功", "已保存 .env，但保存 runtime.json 失败。")
         except Exception as e:
             QMessageBox.critical(self, "错误", f"保存配置失败：{e}")
 
-    def on_reload(self) -> None:
+    def _do_reload(self) -> None:
+        """重新加载所有配置（不弹对话框）。"""
         self.load_model_config()
         self.refresh_provider_choices()
         self.load_config()
+
+    def on_reload(self) -> None:
+        self._do_reload()
         QMessageBox.information(
             self,
             "重新加载成功",

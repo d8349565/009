@@ -5,6 +5,7 @@ from agents import (RequirementAnalyzer, InformationCollector, ReportWriter,
                     QualityJudge, ComprehensiveReportWriter)
 from search_engine import SearchEngine
 from performance_timer import PerformanceTimer
+from process_logger import ProcessLogger
 from report_metadata import ReportMetadata, ReportIndex, extract_summary_from_markdown
 from document_parser import DocumentParser
 import config
@@ -163,6 +164,9 @@ class ResearchAgentSystem:
         print(f"最大循环次数: {self.max_iterations}")
         print("="*60)
 
+        # 过程日志（每次搜索时重置）
+        self.process_logger: Optional[ProcessLogger] = None
+
         # 取消事件（由外部注入）
         self._cancel_event: Optional[threading.Event] = None
 
@@ -260,6 +264,10 @@ class ResearchAgentSystem:
         print(f"时间: {beijing_now_str()}")
         print(f"{'='*60}\n")
         
+        # 初始化过程日志
+        self.process_logger = ProcessLogger(requirement)
+        self.process_logger.log_search_start(self.search_engine.engine_type)
+
         # 保存原始需求
         self.context['original_requirement'] = requirement
         self.context['analysis_result'] = None  # 保存分析结果
@@ -271,6 +279,7 @@ class ResearchAgentSystem:
             analysis_result = self.requirement_analyzer.analyze(requirement)
             self.context['analysis_result'] = analysis_result  # 保存到上下文
             self.timer.end("步骤1-需求分析", {'keywords_count': len(analysis_result.get('search_keywords', []))})
+            self.process_logger.log_analysis(analysis_result)
 
             self._check_cancelled()
 
@@ -288,6 +297,7 @@ class ResearchAgentSystem:
             self.timer.start("步骤3-执行搜索", f"搜索 {len(search_keywords)} 个关键词")
             search_results = self.search_engine.search(search_keywords)
             self.timer.end("步骤3-执行搜索", {'keywords_count': len(search_keywords), 'results_count': len(search_results)})
+            self.process_logger.log_search_candidates(self.search_engine._last_all_results, iteration=1)
 
             # 显示搜索概要
             summary = self.search_engine.create_summary(search_results)
@@ -317,6 +327,7 @@ class ResearchAgentSystem:
             cleaned_data = cleaned_result.get('valid_sources', [])
             self.context['collected_data'] = cleaned_data
             self.timer.end("步骤4-信息评估", {'input_count': len(search_results), 'output_count': len(cleaned_data)})
+            self.process_logger.log_info_collection(cleaned_data, cleaned_result.get('filtered_out', 0))
 
             print(f"收集到有效数据: {len(cleaned_data)} 条")
 
@@ -373,6 +384,10 @@ class ResearchAgentSystem:
         print(f"时间: {beijing_now_str()}")
         print(f"{'='*60}\n")
         
+        # 初始化过程日志
+        self.process_logger = ProcessLogger(requirement)
+        self.process_logger.log_search_start(self.search_engine.engine_type)
+
         # 保存原始需求
         self.context['original_requirement'] = requirement
         self.context['analysis_result'] = None  # 保存分析结果
@@ -383,6 +398,7 @@ class ResearchAgentSystem:
         print(f"\n[步骤1] 深度分析需求...")
         analysis_result = self.requirement_analyzer.analyze(requirement)
         self.context['analysis_result'] = analysis_result  # 保存到上下文
+        self.process_logger.log_analysis(analysis_result)
         self._check_cancelled()
 
         while iteration < self.max_iterations:
@@ -422,6 +438,7 @@ class ResearchAgentSystem:
                 print(f"[步骤3] 执行搜索...")
                 search_results = self.search_engine.search(search_keywords)
                 print(f"✓ 找到 {len(search_results)} 条搜索结果")
+                self.process_logger.log_search_candidates(self.search_engine._last_all_results, iteration=iteration)
 
                 self._check_cancelled()
 
@@ -449,6 +466,7 @@ class ResearchAgentSystem:
                 
                 # 提取有效来源列表
                 cleaned_data = cleaned_result.get('valid_sources', [])
+                self.process_logger.log_info_collection(cleaned_data, cleaned_result.get('filtered_out', 0))
                 
                 # 累积数据（去重）
                 existing_urls = {item.get('url', '') for item in self.context['collected_data']}
@@ -525,6 +543,7 @@ class ResearchAgentSystem:
                     final_report,
                     iteration
                 )
+                self.process_logger.log_quality_judgment(judgment, iteration)
                 
                 # 更新上下文
                 self.context['missing_aspects'] = judgment.get('missing_aspects', [])
@@ -618,11 +637,11 @@ class ResearchAgentSystem:
                 # 限制长度（最多30个字符）
                 clean_topic = clean_topic[:30]
                 timestamp = beijing_now_str('%Y%m%d_%H%M%S')
-                filename = f"{clean_topic}_{timestamp}.md"
+                filename = f"{timestamp}_{clean_topic}.md"
             else:
                 # 如果没有主题，使用默认格式
                 timestamp = beijing_now_str('%Y%m%d_%H%M%S')
-                filename = f"report_{timestamp}.md"
+                filename = f"{timestamp}_report.md"
         
         # 构建完整路径
         filepath = os.path.join(reports_dir, filename)
@@ -641,6 +660,15 @@ class ResearchAgentSystem:
                 analysis_result=analysis_result,
                 search_keywords=search_keywords
             )
+
+            # 生成并保存过程日志
+            if self.process_logger is not None:
+                self.process_logger.log_report(report)
+                self.process_logger.log_keyword_stats(
+                    self.search_engine.get_search_stats().get('keyword_logs', [])
+                )
+                self.process_logger.log_timing(self.timer)
+                self.process_logger.save_alongside_report(filepath)
             
             # 自动打开报告
             if auto_open:

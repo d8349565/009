@@ -51,6 +51,8 @@ class SearchEngine:
         # 统计信息：每次向单个关键词发起的搜索调用计数，以及每个关键词的日志
         self._total_search_calls = 0
         self._keyword_logs: List[Dict[str, Any]] = []
+        # 每次 search() 调用后，保存去重后、最终筛选前的全部候选（供过程日志使用）
+        self._last_all_results: List[Dict[str, Any]] = []
         # Cache fetched pages to avoid duplicate network calls across keywords.
         self._content_cache: Dict[str, str] = {}
         self._content_cache_lock = threading.Lock()
@@ -365,7 +367,10 @@ class SearchEngine:
                 except Exception:
                     full_content = ""
                 if full_content and len(full_content) > len(results[idx].get("content", "") or ""):
+                    results[idx]["_snippet_len"] = len(results[idx].get("content", "") or "")
                     results[idx]["content"] = full_content
+                    results[idx]["_fetched_full"] = True
+                    results[idx]["_full_content_len"] = len(full_content)
                     upgraded += 1
                 completed += 1
                 if completed % 5 == 0 or completed == total_candidates:
@@ -476,6 +481,13 @@ class SearchEngine:
                     item["content"] = full_text
         for keyword in keywords_to_search:
             self._print_fetch_failure_summary(keyword)
+
+        # 快照：全文抓取完成后再记录，保证 content_len 反映实际内容长度
+        self._last_all_results = []
+        for _r in all_results:
+            _entry = {k: v for k, v in _r.items() if k != 'content'}
+            _entry['content_len'] = len(_r.get('content', '') or '')
+            self._last_all_results.append(_entry)
 
         # Final selection after enrichment.
         final_results = self._smart_select_results(all_results, target_max)

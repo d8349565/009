@@ -458,7 +458,8 @@ class InformationCollector(BaseAgent):
         result = {
             "valid_sources": all_valid_sources,
             "overall_assessment": f"{'并发' if use_concurrent else '串行'}评估完成，共处理 {len(search_results)} 条结果，有效来源 {len(all_valid_sources)} 个，耗时 {duration:.2f}秒",
-            "data_quality": "良好" if len(all_valid_sources) > 0 else "较差"
+            "data_quality": "良好" if len(all_valid_sources) > 0 else "较差",
+            "filtered_out": filtered_out,
         }
         
         # 显示结果摘要
