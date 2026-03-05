@@ -629,7 +629,10 @@ class ReportWriter(BaseAgent):
             "search_keywords": analysis.get('search_keywords', [])[:5]
         }
         
+        current_datetime = getattr(self, 'system_datetime', None) or ''
         user_message = f"""用户需求: {requirement}
+
+当前分析时间: {current_datetime}（北京时间）
 
 需求分析:
 {json.dumps(simplified_analysis, ensure_ascii=False, indent=2)}
@@ -643,7 +646,7 @@ class ReportWriter(BaseAgent):
 3. 标注数据来源
 4. 保持客观准确
 5. 优先将高可信来源（公告/财报/交易所/主流财经媒体）作为核心证据，低可信来源只能作为情绪旁证
-6. 如果用户使用“最近/近期”等表述，默认按近90天组织主结论，并将更早数据放到背景部分
+6. 当前分析时间已在上方提供，处理"今天/今年/近期/最近"等相对时间时以该时间为准，不得默认使用2024年
 7. 若不同来源数据冲突，必须明确写出“口径差异/时点差异”，结论使用区间或趋势判断，不强行单值"""
         
         prompt_length = len(user_message)
@@ -652,9 +655,69 @@ class ReportWriter(BaseAgent):
         report_start = time.time()
         report = self.call_llm(user_message)
         report_duration = time.time() - report_start
-        
+
+        # 脚注重新编号，确保连续
+        report = self._renumber_footnotes(report)
+
         print(f"\n✓ 报告生成完成！（耗时: {report_duration:.2f}秒）")
         return report
+
+    @staticmethod
+    def _renumber_footnotes(report: str) -> str:
+        """将报告中的脚注编号按首次出现顺序重新整理为连续数字（从1开始），并对定义行排序去重。"""
+        all_refs_pattern = re.compile(r'\[\^(\d+)\]')
+
+        # 第一遍：按正文中首次出现顺序建立旧编号→新编号的映射（定义行不计入顺序）
+        seen: Dict[str, str] = {}
+        counter = 0
+        for match in all_refs_pattern.finditer(report):
+            old_num = match.group(1)
+            pos_after = match.end()
+            is_definition = pos_after < len(report) and report[pos_after] == ':'
+            if not is_definition and old_num not in seen:
+                counter += 1
+                seen[old_num] = str(counter)
+
+        if not seen:
+            return report
+
+        # 第二遍：替换全部 [^N]（包括正文引用和章节定义）
+        def replace_ref(m: re.Match) -> str:
+            old = m.group(1)
+            return f'[^{seen[old]}]' if old in seen else m.group(0)
+
+        report = all_refs_pattern.sub(replace_ref, report)
+
+        # 第三遍：对定义行（[^N]: ...）排序并去重
+        # 每个编号只保留第一次出现的定义行，然后按编号升序重排
+        lines = report.splitlines(keepends=True)
+        result: List[str] = []
+        # 当前连续定义行缓冲区：num -> line（仅记录每个编号首次出现）
+        def_buffer: List[tuple] = []       # [(num, line), ...]
+        seen_def_nums: set = set()          # 全局已记录过的定义编号（跨块去重）
+
+        def flush_buffer() -> None:
+            if not def_buffer:
+                return
+            def_buffer.sort(key=lambda x: x[0])
+            for _, def_line in def_buffer:
+                result.append(def_line)
+            def_buffer.clear()
+
+        for line in lines:
+            m = re.match(r'^\[\^(\d+)\]:', line)
+            if m:
+                num = int(m.group(1))
+                if num not in seen_def_nums:
+                    seen_def_nums.add(num)
+                    def_buffer.append((num, line))
+                # 跳过重复定义行
+            else:
+                flush_buffer()
+                result.append(line)
+
+        flush_buffer()
+        return ''.join(result)
 
 
 class QualityJudge(BaseAgent):

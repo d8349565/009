@@ -2,6 +2,7 @@
 AI研究报告生成系统 - PyQt6 GUI界面
 """
 
+import contextvars
 import os
 import subprocess
 import sys
@@ -50,6 +51,10 @@ from runtime_config import get_runtime_config_path, load_runtime_config, save_ru
 from time_utils import beijing_now_str
 
 
+# Context variable so ThreadPoolExecutor child threads inherit the correct emitter
+_LOG_EMITTER_CTX: contextvars.ContextVar = contextvars.ContextVar('_log_emitter', default=None)
+
+
 def open_in_system(path: Path) -> None:
     if os.name == "nt":
         os.startfile(path)  # type: ignore[attr-defined]
@@ -73,11 +78,14 @@ class QtLogRouter:
         with self._lock:
             self._targets[thread_id] = emitter
             self._buffers.setdefault(thread_id, "")
+        # Propagate emitter to ThreadPoolExecutor child threads via context variable
+        _LOG_EMITTER_CTX.set(emitter)
 
     def unregister(self, thread_id: int) -> None:
         with self._lock:
             self._targets.pop(thread_id, None)
             self._buffers.pop(thread_id, None)
+        _LOG_EMITTER_CTX.set(None)
 
     def write(self, message: str) -> int:
         if not message:
@@ -87,7 +95,11 @@ class QtLogRouter:
         with self._lock:
             thread_id = threading.get_ident()
             emitter = self._targets.get(thread_id)
+            if emitter is None:
+                # Inherited by ThreadPoolExecutor child threads via contextvars
+                emitter = _LOG_EMITTER_CTX.get(None)
             if emitter is None and len(self._targets) == 1:
+                # Fallback: single active task owns all unregistered thread output
                 emitter = next(iter(self._targets.values()))
 
             if emitter is None:
@@ -117,6 +129,10 @@ class QtLogRouter:
         with self._lock:
             thread_id = threading.get_ident()
             emitter = self._targets.get(thread_id)
+            if emitter is None:
+                emitter = _LOG_EMITTER_CTX.get(None)
+            if emitter is None and len(self._targets) == 1:
+                emitter = next(iter(self._targets.values()))
             if emitter is not None:
                 buf = self._buffers.get(thread_id, "")
                 if buf.strip():
@@ -149,6 +165,7 @@ class ResearchTaskWorker(QObject):
     started = pyqtSignal()
     finished = pyqtSignal(str)
     failed = pyqtSignal(str)
+    cancelled = pyqtSignal()  # 新增：取消信号
     log_message = pyqtSignal(str)
 
     def __init__(self, requirement: str, search_mode: str, task_id: int):
@@ -156,6 +173,17 @@ class ResearchTaskWorker(QObject):
         self.requirement = requirement
         self.search_mode = search_mode
         self.task_id = task_id
+        self._cancel_event = threading.Event()
+        self._system = None  # 保存ResearchAgentSystem引用以便取消
+
+    def request_cancel(self) -> None:
+        """请求取消任务：设置取消事件并通知系统。"""
+        self._cancel_event.set()
+        if self._system is not None:
+            try:
+                self._system.cancel()
+            except Exception:
+                pass
 
     def run(self) -> None:
         thread_id = threading.get_ident()
@@ -170,21 +198,23 @@ class ResearchTaskWorker(QObject):
             print(f"🚀 任务 #{self.task_id} 开始执行")
             print(f"{'=' * 60}\n")
 
-            system = ResearchAgentSystem()
+            self._system = ResearchAgentSystem()
+            self._system.set_cancel_event(self._cancel_event)
+
             if self.search_mode == "quick":
                 print("📌 使用快速搜索模式")
-                report = system.quick_search(self.requirement)
+                report = self._system.quick_search(self.requirement)
             else:
                 print("📌 使用完整搜索模式")
-                report = system.process_requirement(self.requirement)
+                report = self._system.process_requirement(self.requirement)
 
-            analysis_result = system.context.get("analysis_result")
+            analysis_result = self._system.context.get("analysis_result")
             search_keywords = None
-            if system.context.get("search_history"):
-                search_keywords = system.context["search_history"][0].get("keywords", [])
+            if self._system.context.get("search_history"):
+                search_keywords = self._system.context["search_history"][0].get("keywords", [])
 
             print("\n💾 正在保存报告...")
-            system.save_report(
+            self._system.save_report(
                 report,
                 auto_open=True,
                 topic=self.requirement,
@@ -196,9 +226,15 @@ class ResearchTaskWorker(QObject):
             print(f"✅ 任务 #{self.task_id} 完成")
             print(f"{'=' * 60}\n")
             self.finished.emit(report)
+        except InterruptedError:
+            print(f"\n{'=' * 60}")
+            print(f"🚫 任务 #{self.task_id} 已被用户取消")
+            print(f"{'=' * 60}\n")
+            self.cancelled.emit()
         except Exception as e:
             self.failed.emit(str(e))
         finally:
+            self._system = None
             if LOG_ROUTER_OUT:
                 LOG_ROUTER_OUT.unregister(thread_id)
             if LOG_ROUTER_ERR:
@@ -398,15 +434,31 @@ class TaskWidget(QWidget):
         self.worker.log_message.connect(self.append_log)
         self.worker.finished.connect(self.on_task_complete)
         self.worker.failed.connect(self.on_task_error)
+        self.worker.cancelled.connect(self.on_task_cancelled)
         self.worker.finished.connect(self.thread.quit)
         self.worker.failed.connect(self.thread.quit)
+        self.worker.cancelled.connect(self.thread.quit)
         self.thread.finished.connect(self.thread.deleteLater)
         self.thread.finished.connect(self._cleanup_worker)
         self.thread.start()
 
     def on_close(self) -> None:
         if self.thread and self.thread.isRunning():
-            QMessageBox.warning(self, "提示", "任务正在运行，暂不支持中断，请等待完成后关闭")
+            reply = QMessageBox.question(
+                self,
+                "取消任务",
+                f"任务 #{self.task_id} 正在运行。\n是否取消任务并关闭此标签页？\n（将在当前步骤完成后停止）",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self.progress_label.setText("⏳ 正在取消...")
+                self.close_btn.setEnabled(False)
+                if self.worker:
+                    self.worker.request_cancel()
+                # 线程结束后自动关闭标签页
+                if self.thread:
+                    self.thread.finished.connect(lambda: self.on_close_callback(self.task_id))
             return
         self.on_close_callback(self.task_id)
 
@@ -431,6 +483,16 @@ class TaskWidget(QWidget):
         self.append_log(f"❌ 错误: {error_msg}")
         self.append_log("-" * 60)
         self._restore_controls()
+
+    def on_task_cancelled(self) -> None:
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_label.setText("🚫 已取消")
+        self.append_log("-" * 60)
+        self.append_log(f"🚫 任务 #{self.task_id} 已被取消")
+        self.append_log("-" * 60)
+        self._restore_controls()
+        self.close_btn.setEnabled(True)
 
     def _restore_controls(self) -> None:
         self.start_btn.setEnabled(True)

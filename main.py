@@ -14,6 +14,7 @@ import os
 from typing import Dict, List, Any, Optional
 from time_utils import beijing_now_str
 from llm_providers import get_llm_manager
+import threading
 
 
 def print_model_configuration():
@@ -161,6 +162,23 @@ class ResearchAgentSystem:
         print(f"系统时间: {self.system_datetime}（北京时间）")
         print(f"最大循环次数: {self.max_iterations}")
         print("="*60)
+
+        # 取消事件（由外部注入）
+        self._cancel_event: Optional[threading.Event] = None
+
+    def set_cancel_event(self, event: threading.Event) -> None:
+        """注入取消事件，由GUI层调用。"""
+        self._cancel_event = event
+
+    def cancel(self) -> None:
+        """请求取消当前任务。"""
+        if self._cancel_event is not None:
+            self._cancel_event.set()
+
+    def _check_cancelled(self) -> None:
+        """检查是否已请求取消，若是则抛出 InterruptedError。"""
+        if self._cancel_event is not None and self._cancel_event.is_set():
+            raise InterruptedError("任务已被用户取消")
     
     def _generate_report_info(self, iterations: int) -> str:
         """
@@ -253,7 +271,9 @@ class ResearchAgentSystem:
             analysis_result = self.requirement_analyzer.analyze(requirement)
             self.context['analysis_result'] = analysis_result  # 保存到上下文
             self.timer.end("步骤1-需求分析", {'keywords_count': len(analysis_result.get('search_keywords', []))})
-            
+
+            self._check_cancelled()
+
             # 步骤2: 搜索策略（使用分析结果中的关键词）
             search_keywords = (
                 analysis_result.get('search_keywords')
@@ -262,17 +282,17 @@ class ResearchAgentSystem:
                 or [requirement]
             )
             print(f"\n[步骤2] 搜索策略：全面了解主题")
-            
+
             # 步骤3: 执行搜索
             print(f"[步骤3] 执行搜索...")
             self.timer.start("步骤3-执行搜索", f"搜索 {len(search_keywords)} 个关键词")
             search_results = self.search_engine.search(search_keywords)
             self.timer.end("步骤3-执行搜索", {'keywords_count': len(search_keywords), 'results_count': len(search_results)})
-            
+
             # 显示搜索概要
             summary = self.search_engine.create_summary(search_results)
             print(f"✓ 找到 {len(search_results)} 条搜索结果")
-            
+
             # 记录搜索历史
             self.context['search_history'].append({
                 'iteration': 1,
@@ -280,24 +300,28 @@ class ResearchAgentSystem:
                 'purpose': '快速搜索',
                 'results_count': len(search_results)
             })
-            
+
+            self._check_cancelled()
+
             # 步骤4: 信息评估和清理
             print(f"\n[步骤4] 评估信息可信度和相关性...")
             self.timer.start("步骤4-信息评估", f"评估 {len(search_results)} 条搜索结果")
             collection_context = f"原始需求: {requirement}\n"
-            
+
             cleaned_result = self.information_collector.evaluate_and_clean(
-                search_results, 
+                search_results,
                 collection_context
             )
-            
+
             # 提取有效来源列表
             cleaned_data = cleaned_result.get('valid_sources', [])
             self.context['collected_data'] = cleaned_data
             self.timer.end("步骤4-信息评估", {'input_count': len(search_results), 'output_count': len(cleaned_data)})
-            
+
             print(f"收集到有效数据: {len(cleaned_data)} 条")
-            
+
+            self._check_cancelled()
+
             # 步骤5: 生成报告
             print(f"\n[步骤5] 生成报告...")
             self.timer.start("步骤5-生成报告", f"基于 {len(cleaned_data)} 条数据生成报告")
@@ -307,7 +331,7 @@ class ResearchAgentSystem:
                 self.context['collected_data']
             )
             self.timer.end("步骤5-生成报告", {'data_sources': len(cleaned_data)})
-            
+
             print(f"\n{'='*60}")
             print("✓ 快速搜索完成！")
             print(f"总搜索次数: {len(self.context['search_history'])}")
@@ -359,7 +383,8 @@ class ResearchAgentSystem:
         print(f"\n[步骤1] 深度分析需求...")
         analysis_result = self.requirement_analyzer.analyze(requirement)
         self.context['analysis_result'] = analysis_result  # 保存到上下文
-        
+        self._check_cancelled()
+
         while iteration < self.max_iterations:
             iteration += 1
             print(f"\n{'#'*60}")
@@ -397,7 +422,9 @@ class ResearchAgentSystem:
                 print(f"[步骤3] 执行搜索...")
                 search_results = self.search_engine.search(search_keywords)
                 print(f"✓ 找到 {len(search_results)} 条搜索结果")
-                
+
+                self._check_cancelled()
+
                 # 记录搜索历史
                 self.context['search_history'].append({
                     'iteration': iteration,
@@ -432,7 +459,9 @@ class ResearchAgentSystem:
                         new_data_count += 1
                 
                 print(f"本轮新增有效数据: {new_data_count} 条，累计: {len(self.context['collected_data'])} 条")
-                
+
+                self._check_cancelled()
+
                 # 步骤5: 生成或更新报告
                 print(f"\n[步骤5] {'生成' if iteration == 1 else '更新'}报告...")
                 

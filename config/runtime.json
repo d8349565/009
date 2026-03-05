@@ -23,8 +23,8 @@
       "temperature": 0.3
     },
     "information_collector": {
-      "provider": "openrouter",
-      "model": "z-ai/glm-4.5-air:free",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
       "use_reasoner": false,
       "temperature": 0.2
     },
