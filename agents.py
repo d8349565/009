@@ -191,7 +191,7 @@ class RequirementAnalyzer(BaseAgent):
         
         parsed_result = self._parse_analysis_json(response)
 
-        # JSON 首次解析失败时，追加一次“严格JSON”纠正请求，提升稳定性。
+        # JSON 首次解析失败时，追加一次严格JSON纠正请求，提升稳定性。
         if not parsed_result:
             try:
                 repair_prompt = (
@@ -671,7 +671,7 @@ class ReportWriter(BaseAgent):
         report = self._renumber_footnotes(report)
 
         print(f"\n✓ 报告生成完成！（耗时: {report_duration:.2f}秒）")
-        return report“”
+        return report
 
     @staticmethod
     def _renumber_footnotes(report: str) -> str:
