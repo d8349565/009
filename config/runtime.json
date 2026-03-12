@@ -109,6 +109,27 @@
         {"id": "qwen2.5-72b-instruct", "name": "qwen2.5-72b-instruct", "description": "Qwen2.5开源72B"},
         {"id": "custom", "name": "自定义模型...", "description": "手动输入模型ID"}
       ]
+    },
+    "coding_plan": {
+      "type": "openai_compatible",
+      "api_key_env": "CODING_PLAN_API_KEY",
+      "base_url": "https://coding.dashscope.aliyuncs.com/v1",
+      "default_model": "qwen3.5-plus",
+      "reasoner_model": "kimi-k2.5",
+      "capabilities": {
+        "supports_temperature": true
+      },
+      "models": [
+        {"id": "qwen3.5-plus", "name": "qwen3.5-plus ⭐", "description": "推荐，支持图片理解"},
+        {"id": "kimi-k2.5", "name": "kimi-k2.5 ⭐", "description": "推荐，支持图片理解"},
+        {"id": "glm-5", "name": "glm-5 ⭐", "description": "推荐"},
+        {"id": "MiniMax-M2.5", "name": "MiniMax-M2.5 ⭐", "description": "推荐"},
+        {"id": "qwen3-max-2026-01-23", "name": "qwen3-max-2026-01-23", "description": "Qwen3 Max快照"},
+        {"id": "qwen3-coder-next", "name": "qwen3-coder-next", "description": "编程专用"},
+        {"id": "qwen3-coder-plus", "name": "qwen3-coder-plus", "description": "编程专用Plus"},
+        {"id": "glm-4.7", "name": "glm-4.7", "description": "GLM-4系列"},
+        {"id": "custom", "name": "自定义模型...", "description": "手动输入模型ID"}
+      ]
     }
   }
 }

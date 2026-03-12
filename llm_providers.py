@@ -55,6 +55,14 @@ DEFAULT_PROVIDER_SPECS: Dict[str, Dict[str, Any]] = {
         "aliases": ["dashscope"],
         "capabilities": {"supports_temperature": True},
     },
+    "coding_plan": {
+        "type": "openai_compatible",
+        "api_key_env": "CODING_PLAN_API_KEY",
+        "base_url": "https://coding.dashscope.aliyuncs.com/v1",
+        "default_model": "qwen3.5-plus",
+        "reasoner_model": "kimi-k2.5",
+        "capabilities": {"supports_temperature": True},
+    },
 }
 
 

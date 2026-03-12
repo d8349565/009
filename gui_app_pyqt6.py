@@ -649,6 +649,7 @@ class ConfigTab(QWidget):
             ("ZHIPU_API_KEY", "Zhipu/GLM API Key"),
             ("OPENROUTER_API_KEY", "OpenRouter API Key"),
             ("DASHSCOPE_API_KEY", "阿里百炼 (Qwen) API Key"),
+            ("CODING_PLAN_API_KEY", "Coding Plan API Key (sk-sp-xxxx)"),
             ("TAVILY_API_KEY", "Tavily API Key"),
         ]
         for row, (key, label) in enumerate(env_vars):
@@ -977,6 +978,7 @@ class ConfigTab(QWidget):
                                 "ZHIPU_API_KEY",
                                 "OPENROUTER_API_KEY",
                                 "DASHSCOPE_API_KEY",
+                                "CODING_PLAN_API_KEY",
                                 "TAVILY_API_KEY",
                                 "SEARXNG_BASE_URL",
                                 "SEARCH_ENGINE_TYPE",
