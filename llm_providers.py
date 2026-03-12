@@ -46,7 +46,7 @@ DEFAULT_PROVIDER_SPECS: Dict[str, Dict[str, Any]] = {
     },
     "qwen": {
         "type": "openai_compatible",
-        "api_key_env": "QWEN_API_KEY",
+        "api_key_env": "DASHSCOPE_API_KEY",
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
         "default_model_env": "QWEN_DEFAULT_MODEL",
         "reasoner_model_env": "QWEN_REASONER_MODEL",

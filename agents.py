@@ -90,8 +90,11 @@ class BaseAgent:
                 if self.use_reasoner:
                     print(f"  [{self.role}] 使用思考模式进行深度分析...")
                 print(f"  [{self.role}] 提供商: {self.provider_name.upper()}, 模型: {model_to_use}")
-            elif config.LOG_LEVEL == 'normal' and self.use_reasoner:
-                print(f"  💡 {self.role}使用推理模式分析中...")
+            elif config.LOG_LEVEL == 'normal':
+                if self.use_reasoner:
+                    print(f"  💡 {self.role}使用推理模式分析中... (提供商: {self.provider_name.upper()}, 模型: {model_to_use})")
+                else:
+                    print(f"  [{self.role}] 提供商: {self.provider_name.upper()}, 模型: {model_to_use}")
             
             # 记录API调用开始时间
             api_start_time = time.time()
