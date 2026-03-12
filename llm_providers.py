@@ -44,6 +44,17 @@ DEFAULT_PROVIDER_SPECS: Dict[str, Dict[str, Any]] = {
         "reasoner_model": "openai/o1-preview",
         "capabilities": {"supports_temperature": True},
     },
+    "qwen": {
+        "type": "openai_compatible",
+        "api_key_env": "QWEN_API_KEY",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "default_model_env": "QWEN_DEFAULT_MODEL",
+        "reasoner_model_env": "QWEN_REASONER_MODEL",
+        "default_model": "qwen-plus",
+        "reasoner_model": "qwq-plus",
+        "aliases": ["dashscope"],
+        "capabilities": {"supports_temperature": True},
+    },
 }
 
 
@@ -275,3 +286,9 @@ def get_llm_manager() -> LLMProviderManager:
     if _manager is None:
         _manager = LLMProviderManager()
     return _manager
+
+
+def reset_llm_manager() -> None:
+    """重置LLM管理器单例，使其在下次调用时重新从配置加载。"""
+    global _manager
+    _manager = None

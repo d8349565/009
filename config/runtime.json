@@ -6,7 +6,7 @@
     "fetch_failure_log_mode": "summary"
   },
   "search": {
-    "engine_type": "tavily",
+    "engine_type": "searxng",
     "mode": "full",
     "max_loop_count": 3,
     "timeout": 10,
@@ -17,8 +17,8 @@
   },
   "agents": {
     "requirement_analyzer": {
-      "provider": "deepseek",
-      "model": "deepseek-chat",
+      "provider": "qwen",
+      "model": "kimi-k2.5",
       "use_reasoner": true,
       "temperature": 0.3
     },
@@ -83,6 +83,63 @@
           "capabilities": {
             "supports_temperature": false
           }
+        }
+      ]
+    },
+    "qwen": {
+      "type": "openai_compatible",
+      "api_key_env": "QWEN_API_KEY",
+      "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "default_model_env": "QWEN_DEFAULT_MODEL",
+      "reasoner_model_env": "QWEN_REASONER_MODEL",
+      "default_model": "qwen-plus",
+      "reasoner_model": "qwq-plus",
+      "aliases": [
+        "dashscope"
+      ],
+      "capabilities": {
+        "supports_temperature": true
+      },
+      "models": [
+        {
+          "id": "qwen-plus",
+          "name": "Qwen Plus",
+          "description": "均衡性能，推荐"
+        },
+        {
+          "id": "qwen-max",
+          "name": "Qwen Max",
+          "description": "最强性能"
+        },
+        {
+          "id": "qwen-turbo",
+          "name": "Qwen Turbo",
+          "description": "快速低成本"
+        },
+        {
+          "id": "qwen-long",
+          "name": "Qwen Long",
+          "description": "超长上下文"
+        },
+        {
+          "id": "qwq-plus",
+          "name": "QwQ Plus (推理)",
+          "description": "深度推理模型"
+        },
+        {
+          "id": "qwen3-235b-a22b",
+          "name": "Qwen3-235B (开源)",
+          "description": "开源旗舰"
+        },
+        {
+          "id": "qwen3-32b",
+          "name": "Qwen3-32B (开源)",
+          "description": "开源高性能"
+        },
+        {
+          "id": "custom",
+          "name": "自定义模型...",
+          "description": "手动输入模型ID"
         }
       ]
     }

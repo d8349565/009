@@ -43,9 +43,12 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+import importlib
+
 import config
 from agent_config import get_active_agent_config
 from agents import ComprehensiveReportWriter
+from llm_providers import reset_llm_manager
 from main import ResearchAgentSystem
 from runtime_config import get_runtime_config_path, load_runtime_config, save_runtime_config
 from time_utils import beijing_now_str
@@ -645,6 +648,7 @@ class ConfigTab(QWidget):
             ("DEEPSEEK_API_KEY", "DeepSeek API Key"),
             ("ZHIPU_API_KEY", "Zhipu/GLM API Key"),
             ("OPENROUTER_API_KEY", "OpenRouter API Key"),
+            ("QWEN_API_KEY", "阿里百炼 (Qwen) API Key"),
             ("TAVILY_API_KEY", "Tavily API Key"),
         ]
         for row, (key, label) in enumerate(env_vars):
@@ -972,6 +976,7 @@ class ConfigTab(QWidget):
                                 "DEEPSEEK_API_KEY",
                                 "ZHIPU_API_KEY",
                                 "OPENROUTER_API_KEY",
+                                "QWEN_API_KEY",
                                 "TAVILY_API_KEY",
                                 "SEARXNG_BASE_URL",
                                 "SEARCH_ENGINE_TYPE",
@@ -1051,6 +1056,17 @@ class ConfigTab(QWidget):
 
     def _do_reload(self) -> None:
         """重新加载所有配置（不弹对话框）。"""
+        # 重新加载 .env 环境变量
+        try:
+            from dotenv import load_dotenv
+            load_dotenv(override=True)
+        except Exception:
+            pass
+        # 重新加载 config 模块（刷新模块级变量）
+        importlib.reload(config)
+        # 重置 LLM 管理器单例，使其下次重建时读取新配置
+        reset_llm_manager()
+        # 刷新 GUI 控件
         self.load_model_config()
         self.refresh_provider_choices()
         self.load_config()
