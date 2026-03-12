@@ -17,33 +17,33 @@
   },
   "agents": {
     "requirement_analyzer": {
-      "provider": "deepseek",
-      "model": "deepseek-chat",
-      "use_reasoner": true,
+      "provider": "coding_plan",
+      "model": "qwen3.5-plus",
+      "use_reasoner": false,
       "temperature": 0.3
     },
     "information_collector": {
-      "provider": "deepseek",
-      "model": "deepseek-chat",
+      "provider": "coding_plan",
+      "model": "qwen3.5-plus",
       "use_reasoner": false,
       "temperature": 0.2
     },
     "report_writer": {
-      "provider": "deepseek",
-      "model": "deepseek-chat",
-      "use_reasoner": true,
+      "provider": "coding_plan",
+      "model": "kimi-k2.5",
+      "use_reasoner": false,
       "temperature": 0.7
     },
     "quality_judge": {
-      "provider": "deepseek",
-      "model": "deepseek-chat",
-      "use_reasoner": true,
+      "provider": "coding_plan",
+      "model": "qwen3.5-plus",
+      "use_reasoner": false,
       "temperature": 0.7
     },
     "comprehensive_report_writer": {
-      "provider": "deepseek",
-      "model": "deepseek-chat",
-      "use_reasoner": true,
+      "provider": "coding_plan",
+      "model": "kimi-k2.5",
+      "use_reasoner": false,
       "temperature": 0.7
     }
   },
