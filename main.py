@@ -425,10 +425,17 @@ class ResearchAgentSystem:
                         print("[提示] 没有新的搜索目标，结束迭代")
                         break
                     
-                    # 直接使用缺失方面组合原始需求作为搜索关键词
+                    # 从缺失方面提取短关键词（取冒号前的核心词，避免关键词过长导致0结果）
                     search_keywords = []
                     for aspect in missing_aspects[:3]:  # 最多取3个缺失方面
-                        search_keywords.append(f"{requirement} {aspect}")
+                        # 提取冒号前的核心概念（如"实时交易数据缺失：..."→"实时交易数据"）
+                        core_keyword = aspect.split('：')[0].split(':')[0].strip()
+                        # 去除末尾的"缺失"/"不足"/"空白"等修饰词，保留核心主题
+                        for suffix in ['缺失', '不足', '空白', '缺少', '未提供', '问题']:
+                            if core_keyword.endswith(suffix) and len(core_keyword) > len(suffix):
+                                core_keyword = core_keyword[:-len(suffix)]
+                        core_keyword = core_keyword[:20]  # 限制最大长度
+                        search_keywords.append(f"{requirement} {core_keyword}")
                     
                     search_purpose = f"补充缺失信息: {', '.join(missing_aspects[:3])}"
                 

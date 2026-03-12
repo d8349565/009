@@ -634,29 +634,37 @@ class ReportWriter(BaseAgent):
         }
         
         current_datetime = getattr(self, 'system_datetime', None) or ''
-        user_message = f"""用户需求: {requirement}
 
-当前分析时间: {current_datetime}（北京时间）
+        # 无数据时，明确禁止编造，要求如实说明
+        if not cleaned_data:
+            no_data_instruction = (
+                "\n WARNING: No valid data sources found. DO NOT estimate/fabricate any numbers.\n"
+                "严重警告：搜索未返回任何有效数据，严禁推算或编造数据，只能说明未检索到数据并建议获取渠道。\n"
+            )
+        else:
+            no_data_instruction = ""
 
-需求分析:
-{json.dumps(simplified_analysis, ensure_ascii=False, indent=2)}
+        user_message = (
+            "用户需求: " + requirement + "\n\n" +
+            "当前分析时间: " + current_datetime + "\n" +
+            no_data_instruction + "\n" +
+            "需求分析:\n" + json.dumps(simplified_analysis, ensure_ascii=False, indent=2) + "\n\n" +
+            "数据来源（" + str(len(cleaned_data)) + "条）:\n" + data_str + "\n\n" +
+            "请基于以上信息生成研究报告。要求：\n"
+            "1. Markdown格式\n"
+            "2. 标注数据来源\n"
+            "3. 保持客观准确，严禁推算或编造无来源数据\n"
+            "4. 优先将高可信来源（公告/财报/交易所/主流财经媒体）作为核心证据\n"
+            "5. 处理相对时间时以当前分析时间为准，不得默认使用2024年\n"
+            "6. 若不同来源数据冲突，必须明确写出差异原因\n"
+            "7. 若数据来源列表为空，严禁生成含具体数字的内容，须如实说明未检索到数据"
+        )
 
-数据来源（{len(cleaned_data)}条）:
-{data_str}
-
-请基于以上信息生成一份简洁而全面的研究报告。要求：
-1. Markdown格式
-2. 包含数据分析和趋势
-3. 标注数据来源
-4. 保持客观准确
-5. 优先将高可信来源（公告/财报/交易所/主流财经媒体）作为核心证据，低可信来源只能作为情绪旁证
-6. 当前分析时间已在上方提供，处理"今天/今年/近期/最近"等相对时间时以该时间为准，不得默认使用2024年
-7. 若不同来源数据冲突，必须明确写出“口径差异/时点差异”，结论使用区间或趋势判断，不强行单值"""
-        
         prompt_length = len(user_message)
         print(f"  📊 Prompt长度: {prompt_length} 字符")
-        
+
         report_start = time.time()
+“”
         report = self.call_llm(user_message)
         report_duration = time.time() - report_start
 
