@@ -664,7 +664,6 @@ class ReportWriter(BaseAgent):
         print(f"  📊 Prompt长度: {prompt_length} 字符")
 
         report_start = time.time()
-“”
         report = self.call_llm(user_message)
         report_duration = time.time() - report_start
 
@@ -672,7 +671,7 @@ class ReportWriter(BaseAgent):
         report = self._renumber_footnotes(report)
 
         print(f"\n✓ 报告生成完成！（耗时: {report_duration:.2f}秒）")
-        return report
+        return report“”
 
     @staticmethod
     def _renumber_footnotes(report: str) -> str:
