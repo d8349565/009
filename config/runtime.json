@@ -6,7 +6,7 @@
     "fetch_failure_log_mode": "summary"
   },
   "search": {
-    "engine_type": "searxng",
+    "engine_type": "tavily",
     "mode": "full",
     "max_loop_count": 3,
     "timeout": 10,
