@@ -166,6 +166,7 @@ SEARCH_MODE = os.getenv("SEARCH_MODE", str(_runtime_search.get("mode", "quick"))
 MAX_LOOP_COUNT = int(os.getenv("MAX_LOOP_COUNT", str(_runtime_search.get("max_loop_count", 1))))
 SEARCH_TIMEOUT = int(os.getenv("SEARCH_TIMEOUT", str(_runtime_search.get("timeout", 10))))
 MAX_SEARCH_RESULTS = int(os.getenv("MAX_SEARCH_RESULTS", str(_runtime_search.get("max_results", 30))))
+MAX_SEARCH_KEYWORDS = int(os.getenv("MAX_SEARCH_KEYWORDS", str(_runtime_search.get("max_keywords", 5))))
 
 # 以下三个开关已下线，不再对外暴露配置。
 SKIP_EVALUATION = False

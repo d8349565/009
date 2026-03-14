@@ -183,7 +183,30 @@ class ResearchAgentSystem:
         """检查是否已请求取消，若是则抛出 InterruptedError。"""
         if self._cancel_event is not None and self._cancel_event.is_set():
             raise InterruptedError("任务已被用户取消")
-    
+
+    def _print_token_usage_summary(self) -> None:
+        """打印所有 Agent 的 Token 用量汇总。"""
+        agents = [
+            self.requirement_analyzer,
+            self.information_collector,
+            self.report_writer,
+            self.quality_judge,
+        ]
+        total_tokens_all = 0
+        print(f"\n{'='*50}")
+        print("📊 Token 用量汇总")
+        print(f"{'='*50}")
+        for agent in agents:
+            usage = agent.get_token_usage()
+            if usage["call_count"] > 0:
+                print(f"  {usage['role']:12s} | 调用 {usage['call_count']}次 | "
+                      f"Prompt: {usage['prompt_tokens']:,} | "
+                      f"Completion: {usage['completion_tokens']:,} | "
+                      f"Total: {usage['total_tokens']:,}")
+                total_tokens_all += usage["total_tokens"]
+        print(f"  {'合计':12s} | Total Tokens: {total_tokens_all:,}")
+        print(f"{'='*50}")
+
     def _generate_report_info(self, iterations: int) -> str:
         """
         生成报告的元信息（精简版）- 只保留核心统计数据
@@ -371,6 +394,9 @@ class ResearchAgentSystem:
         
         # 打印性能报告
         self.timer.print_report(detailed=True)
+        
+        # 打印 Token 用量
+        self._print_token_usage_summary()
         
         # 在报告末尾添加搜索信息
         report_info = self._generate_report_info(1)
@@ -623,6 +649,9 @@ class ResearchAgentSystem:
             pass
 
         self.timer.end_total()
+        
+        # 打印 Token 用量
+        self._print_token_usage_summary()
         
         # 在报告末尾添加搜索信息
         report_info = self._generate_report_info(iteration)

@@ -50,7 +50,23 @@ class BaseAgent:
         self.model_name = model  # None表示自动选择
         self.default_temperature = temperature
         self.llm_manager = get_llm_manager()
-    
+        # Token 用量统计
+        self._total_prompt_tokens = 0
+        self._total_completion_tokens = 0
+        self._total_tokens = 0
+        self._call_count = 0
+
+    def get_token_usage(self) -> Dict[str, int]:
+        """返回当前 Agent 的累计 Token 用量。"""
+        return {
+            "role": self.role,
+            "provider": self.provider_name,
+            "call_count": self._call_count,
+            "prompt_tokens": self._total_prompt_tokens,
+            "completion_tokens": self._total_completion_tokens,
+            "total_tokens": self._total_tokens,
+        }
+
     def call_llm(self, user_message: str, temperature: Optional[float] = None) -> str:
         """
         调用LLM API（支持多提供商）
@@ -110,14 +126,57 @@ class BaseAgent:
             if reasoning and config.LOG_LEVEL == 'verbose':
                 print(f"  [思考过程] {reasoning[:200]}..." if len(reasoning) > 200 else f"  [思考过程] {reasoning}")
             
-            # 记录API调用耗时（仅verbose模式）
+            # 累计 Token 用量
+            self._total_prompt_tokens += result.prompt_tokens
+            self._total_completion_tokens += result.completion_tokens
+            self._total_tokens += result.total_tokens
+            self._call_count += 1
+            
+            # 记录API调用耗时和Token用量
             api_duration = time.time() - api_start_time
             if config.LOG_LEVEL == 'verbose':
-                print(f"  [{self.role}] API调用耗时: {api_duration:.2f}秒")
+                print(f"  [{self.role}] API调用耗时: {api_duration:.2f}秒, Token: {result.prompt_tokens}+{result.completion_tokens}={result.total_tokens}")
             
             return content
         except Exception as e:
-            raise RuntimeError(f"[{self.role}] LLM call failed: {e}") from e
+            # 分级处理 LLM 调用错误
+            err_str = str(e).lower()
+            # 检查是否为 HTTP 状态码错误（OpenAI SDK 抛出的异常）
+            is_rate_limit = '429' in str(e) or 'rate' in err_str or 'quota' in err_str or 'too many' in err_str
+            is_auth_error = '401' in str(e) or '403' in str(e) or 'unauthorized' in err_str or 'forbidden' in err_str
+            is_server_error = any(code in str(e) for code in ['500', '502', '503', '504'])
+
+            if is_rate_limit:
+                # 429 限流：等待后重试一次
+                import time as _time
+                wait_sec = 10
+                print(f"  ⚠️ [{self.role}] API 限流(429)，等待 {wait_sec}s 后重试...")
+                _time.sleep(wait_sec)
+                try:
+                    result = self.llm_manager.call_llm(
+                        provider_name=self.provider_name,
+                        messages=messages,
+                        model=model_to_use,
+                        use_reasoner=self.use_reasoner,
+                        temperature=effective_temperature
+                    )
+                    return result.content
+                except Exception as retry_e:
+                    raise RuntimeError(f"[{self.role}] LLM 限流重试后仍失败: {retry_e}") from retry_e
+            elif is_auth_error:
+                raise RuntimeError(
+                    f"[{self.role}] API 认证失败(401/403)，请检查 API Key 和 base_url 配置。\n"
+                    f"供应商: {self.provider_name}, 模型: {model_to_use}\n"
+                    f"原始错误: {e}"
+                ) from e
+            elif is_server_error:
+                raise RuntimeError(
+                    f"[{self.role}] API 服务端错误(5xx)，供应商可能暂时不可用。\n"
+                    f"供应商: {self.provider_name}, 模型: {model_to_use}\n"
+                    f"原始错误: {e}"
+                ) from e
+            else:
+                raise RuntimeError(f"[{self.role}] LLM call failed: {e}") from e
 
 
 class RequirementAnalyzer(BaseAgent):
@@ -793,14 +852,18 @@ class QualityJudge(BaseAgent):
             
             return result
         except json.JSONDecodeError:
-            print("[警告] JSON解析失败，默认判定为满足")
+            print("[警告] JSON解析失败，默认判定为不满足（安全优先）")
+            # 尝试用正则兜底提取评分
+            import re
+            score_match = re.search(r'completeness_score["\s:]+(\d+)', response)
+            fallback_score = int(score_match.group(1)) if score_match else 3
             return {
-                "is_satisfied": True,
-                "completeness_score": 7,
-                "accuracy_score": 7,
-                "missing_aspects": [],
+                "is_satisfied": False,
+                "completeness_score": fallback_score,
+                "accuracy_score": fallback_score,
+                "missing_aspects": ["评审结果解析失败，需要重新评估"],
                 "improvement_suggestions": response[:200],
-                "decision": "满足需求"
+                "decision": "需要补充（JSON解析失败，安全降级）"
             }
 
 

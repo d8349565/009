@@ -386,7 +386,9 @@ class SearchEngine:
         
         start_time = time.time()
         all_results = []
-        keywords_to_search = keywords[:3]  # 只使用前3个关键词
+        # 关键词数量上限：默认5个，可通过 runtime.json 的 search.max_keywords 配置
+        max_kw = getattr(config, 'MAX_SEARCH_KEYWORDS', 5)
+        keywords_to_search = keywords[:max_kw]
         
         # 使用线程池并行搜索（每个关键词独立搜索，不拆解）
         with ThreadPoolExecutor(max_workers=5) as executor:
@@ -413,6 +415,7 @@ class SearchEngine:
             
             # 收集搜索结果
             engine_failure_msgs: List[str] = []
+            zero_result_keywords: List[str] = []
             for future in as_completed(future_to_keyword):
                 keyword = future_to_keyword[future]
                 try:
@@ -432,6 +435,8 @@ class SearchEngine:
                     dur = last_ln.get('duration') if last_ln else None
                     print(f"✓ 完成搜索: {keyword} ({len(results)}条) - engine={self.engine_type} duration={dur:.2f}s" if dur is not None else f"✓ 完成搜索: {keyword} ({len(results)}条)")
                     self._print_fetch_failure_summary(keyword)
+                    if len(results) == 0:
+                        zero_result_keywords.append(keyword)
                 except RuntimeError as e:
                     # RuntimeError 表示所有搜索引擎都不可用（SearXNG+Tavily均失败）
                     engine_failure_msgs.append(str(e))
@@ -439,13 +444,44 @@ class SearchEngine:
                 except Exception as e:
                     print(f"✗ 搜索失败: {keyword} - {str(e)}")
 
-            # 如果所有关键词的搜索均因引擎故障失败，直接抛出异常终止流程
-            if engine_failure_msgs and not all_results:
-                combined = "；".join(engine_failure_msgs)
-                raise RuntimeError(
-                    f"所有搜索引擎均不可用，无法继续调查。\n原因：{combined}\n"
-                    "请检查SearXNG服务是否正常，以及是否配置了TAVILY_API_KEY作为备用。"
-                )
+        # ── 自动降级：对返回 0 结果的关键词进行简化后重搜 ──
+        if zero_result_keywords and len(all_results) < self.max_results // 2:
+            simplified_keywords = []
+            for kw in zero_result_keywords:
+                words = kw.split()
+                if len(words) > 2:
+                    # 去掉最后一个词进行简化
+                    simplified_keywords.append(" ".join(words[:-1]))
+                elif len(words) == 2:
+                    # 两个词分别搜索
+                    simplified_keywords.extend(words)
+            simplified_keywords = list(dict.fromkeys(simplified_keywords))[:3]  # 去重，最多3个
+            if simplified_keywords:
+                print(f"\n  ↻ {len(zero_result_keywords)} 个关键词返回 0 结果，尝试简化重搜: {simplified_keywords}")
+                with ThreadPoolExecutor(max_workers=3) as retry_executor:
+                    retry_futures = {}
+                    for kw in simplified_keywords:
+                        if self.engine_type == 'tavily':
+                            f = retry_executor.submit(self._tavily_search, kw, False)
+                        else:
+                            f = retry_executor.submit(self._searxng_search, kw, False)
+                        retry_futures[f] = kw
+                    for f in as_completed(retry_futures):
+                        kw = retry_futures[f]
+                        try:
+                            results = f.result()
+                            all_results.extend(results)
+                            print(f"  ✓ 简化重搜: {kw} ({len(results)}条)")
+                        except Exception as e:
+                            print(f"  ✗ 简化重搜失败: {kw} - {e}")
+
+        # 如果所有关键词的搜索均因引擎故障失败，直接抛出异常终止流程
+        if engine_failure_msgs and not all_results:
+            combined = "；".join(engine_failure_msgs)
+            raise RuntimeError(
+                f"所有搜索引擎均不可用，无法继续调查。\n原因：{combined}\n"
+                "请检查SearXNG服务是否正常，以及是否配置了TAVILY_API_KEY作为备用。"
+            )
         
         # 记录原始结果数量
         raw_count = len(all_results)

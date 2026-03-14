@@ -100,6 +100,9 @@ class LLMResult:
     content: str
     reasoning: Optional[str] = None
     model: str = ""
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
 
 
 class LLMProvider:
@@ -164,7 +167,20 @@ class LLMProvider:
             if isinstance(reasoning, str):
                 reasoning = reasoning.strip() or None
 
-            return LLMResult(content=content, reasoning=reasoning, model=model_to_use)
+            # 提取 Token 用量
+            usage = getattr(response, 'usage', None)
+            prompt_tokens = getattr(usage, 'prompt_tokens', 0) or 0
+            completion_tokens = getattr(usage, 'completion_tokens', 0) or 0
+            total_tokens = getattr(usage, 'total_tokens', 0) or 0
+
+            return LLMResult(
+                content=content,
+                reasoning=reasoning,
+                model=model_to_use,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+            )
         except Exception as e:
             raise RuntimeError(f"LLM API call failed ({self.name}/{model or self.default_model}): {e}") from e
 

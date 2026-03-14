@@ -17,8 +17,8 @@
   },
   "agents": {
     "requirement_analyzer": {
-      "provider": "bailian",
-      "model": "kimi-k2.5",
+      "provider": "deepseek",
+      "model": "deepseek-reasoner",
       "use_reasoner": true,
       "temperature": 0.3
     },
@@ -30,13 +30,13 @@
     },
     "report_writer": {
       "provider": "deepseek",
-      "model": "deepseek-reasoner",
+      "model": "deepseek-chat",
       "use_reasoner": true,
       "temperature": 0.7
     },
     "quality_judge": {
-      "provider": "bailian",
-      "model": "kimi-k2.5",
+      "provider": "deepseek",
+      "model": "deepseek-chat",
       "use_reasoner": true,
       "temperature": 0.7
     },
