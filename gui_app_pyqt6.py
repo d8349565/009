@@ -906,9 +906,9 @@ class ConfigTab(QWidget):
 
     def load_config(self) -> None:
         try:
-            env_file = Path(".env")
+            env_file = Path(__file__).resolve().parent / ".env"
             if env_file.exists():
-                with open(env_file, "r", encoding="utf-8") as f:
+                with open(env_file, "r", encoding="utf-8-sig") as f:
                     for line in f:
                         line = line.strip()
                         if "=" in line and not line.startswith("#"):
@@ -966,8 +966,9 @@ class ConfigTab(QWidget):
                 runtime_cfg = {}
 
             env_lines = []
-            if Path(".env").exists():
-                with open(".env", "r", encoding="utf-8") as f:
+            _env_path = Path(__file__).resolve().parent / ".env"
+            if _env_path.exists():
+                with open(_env_path, "r", encoding="utf-8-sig") as f:
                     for line in f:
                         line = line.strip()
                         if line and not line.startswith("#") and "=" in line:
@@ -1025,11 +1026,11 @@ class ConfigTab(QWidget):
             for key, input_ctrl in self.env_inputs.items():
                 value = input_ctrl.text().strip()
                 if value:
-                    env_lines.append(f'{key}="{value}"')
+                    env_lines.append(f'{key}={value}')
 
             searxng_url = self.searxng_url.text().strip()
             if searxng_url:
-                env_lines.append(f'SEARXNG_BASE_URL="{searxng_url}"')
+                env_lines.append(f'SEARXNG_BASE_URL={searxng_url}')
 
             search_section = runtime_cfg.get("search")
             if not isinstance(search_section, dict):
@@ -1043,7 +1044,8 @@ class ConfigTab(QWidget):
             search_section["content_extract_length"] = int(self.length_spin.value())
 
             save_ok = save_runtime_config(runtime_cfg)
-            with open(".env", "w", encoding="utf-8") as f:
+            env_path = Path(__file__).resolve().parent / ".env"
+            with open(env_path, "w", encoding="utf-8", newline="\n") as f:
                 f.write("\n".join(env_lines))
 
             if save_ok:
@@ -1056,10 +1058,16 @@ class ConfigTab(QWidget):
 
     def _do_reload(self) -> None:
         """重新加载所有配置（不弹对话框）。"""
-        # 重新加载 .env 环境变量
+        # 重新加载 .env 环境变量（自动处理 UTF-8 BOM）
         try:
+            _env_path = Path(__file__).resolve().parent / ".env"
+            if _env_path.exists():
+                # 用 utf-8-sig 读取自动剥除 BOM，如有 BOM 则写回无 BOM 版本
+                raw = _env_path.read_bytes()
+                if raw[:3] == b"\xef\xbb\xbf":
+                    _env_path.write_text(_env_path.read_text(encoding="utf-8-sig"), encoding="utf-8")
             from dotenv import load_dotenv
-            load_dotenv(override=True)
+            load_dotenv(dotenv_path=str(_env_path), override=True)
         except Exception:
             pass
         # 重新加载 config 模块（刷新模块级变量）

@@ -7,3 +7,4 @@ reports
 .github
 .trae
 pw_browsers
+.venv

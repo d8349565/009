@@ -739,11 +739,28 @@ class QualityJudge(BaseAgent):
             temperature=temperature,
         )
     
-    def judge(self, requirement: str, report: str, iteration: int) -> Dict[str, Any]:
-        """判断质量"""
+    def judge(self, requirement: str, report: str, iteration: int, data_count: int = -1) -> Dict[str, Any]:
+        """判断质量
+        
+        Args:
+            data_count: 本次参与报告生成的有效数据条数，-1 表示未知。
+                        为 0 时直接判定为不满足，避免对空数据报告打高分。
+        """
         print(f"\n{'='*60}")
         print(f"[步骤6] 质量评审员正在评估报告质量...")
         print(f"{'='*60}")
+
+        # 数据为 0 时不做 LLM 评审，直接判定为不满足
+        if data_count == 0:
+            print("  ⚠️  有效数据为 0 条，跳过 LLM 评审，直接判定为不满足需求")
+            return {
+                "is_satisfied": False,
+                "completeness_score": 0,
+                "accuracy_score": 0,
+                "missing_aspects": ["未能获取任何搜索数据"],
+                "improvement_suggestions": "搜索引擎未返回有效结果，请检查搜索引擎状态或更换搜索关键词后重试。",
+                "decision": "不满足需求（无有效数据）"
+            }
         
         user_message = f"""用户需求: {requirement}
 

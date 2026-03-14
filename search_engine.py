@@ -755,31 +755,40 @@ class SearchEngine:
         try:
             # 构建SearXNG API请求
             url = f"{config.SEARXNG_BASE_URL}/search"
-            params = {
-                'q': keyword,
-                'format': 'json',
-                'categories': 'general',
-                'language': 'zh-CN'
-            }
-            
             headers = self.headers.copy()
             if config.SEARXNG_API_KEY:
                 headers['Authorization'] = f'Bearer {config.SEARXNG_API_KEY}'
-            
-            response = self.session.get(
-                url, 
-                params=params, 
-                headers=headers, 
-                timeout=self.timeout
-            )
-            response.raise_for_status()
-            
-            data = response.json()
+
+            # 同时搜索 general 和 news 两个分类，合并结果以提高召回率
+            # （部分 SearXNG 实例 general 引擎被反爬封锁，但 news 引擎通常可用）
+            categories_to_try = ['general', 'news']
+            raw_items: list = []
+            for category in categories_to_try:
+                params = {
+                    'q': keyword,
+                    'format': 'json',
+                    'categories': category,
+                    'language': 'zh-CN'
+                }
+                try:
+                    resp = self.session.get(
+                        url,
+                        params=params,
+                        headers=headers,
+                        timeout=self.timeout
+                    )
+                    resp.raise_for_status()
+                    cat_data = resp.json()
+                    cat_items = cat_data.get('results', [])
+                    raw_items.extend(cat_items)
+                except Exception as cat_err:
+                    print(f"  [SearXNG] category={category} 请求失败: {cat_err}")
+
             results = []
-            seen_urls = set()
-            
+            seen_urls: set = set()
+
             # 解析SearXNG返回的结果，使用配置中的最大结果数
-            for item in data.get('results', [])[:self.max_results]:
+            for item in raw_items[:self.max_results * 2]:
                 item_url = self._normalize_url(item.get('url', ''))
                 if self._should_skip_result_url(item_url):
                     continue
@@ -795,16 +804,16 @@ class SearchEngine:
                     '_source_engine': 'searxng',
                     'score': item.get('score', 0),  # SearXNG 聚合相关性分值
                 }
-                
+
                 # 尝试获取完整网页内容（提高数据完整性）
                 # 如果内容过短（<500字符）或内容为空，则抓取完整网页
                 if fetch_full_content and (len(result['content']) < 500 or not result['content']) and result['url']:
                     full_content = self.fetch_content(result['url'])
                     if full_content and len(full_content) > len(result['content']):
                         result['content'] = full_content
-                
+
                 results.append(result)
-            
+
             print(f"  找到 {len(results)} 条真实搜索结果")
             return results
 

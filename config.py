@@ -2,11 +2,30 @@
 配置文件
 """
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 from runtime_config import load_runtime_config, get_nested, parse_bool
 
+
+def _load_env_safe() -> None:
+    """加载 .env 文件，自动处理 UTF-8 BOM，避免 key 名含 \\ufeff 的问题。"""
+    env_path = Path(__file__).resolve().parent / ".env"
+    if not env_path.exists():
+        return
+    # 先用 utf-8-sig 读取（自动剥除 BOM），写入临时无 BOM 内容后再让 dotenv 解析
+    try:
+        text = env_path.read_text(encoding="utf-8-sig")
+        # 写回无 BOM 格式（只在有 BOM 时才写）
+        raw = env_path.read_bytes()
+        if raw[:3] == b"\xef\xbb\xbf":
+            env_path.write_text(text, encoding="utf-8")
+    except Exception:
+        pass
+    load_dotenv(dotenv_path=str(env_path), override=True)
+
+
 # 加载环境变量
-load_dotenv()
+_load_env_safe()
 
 RUNTIME_CONFIG = load_runtime_config()
 

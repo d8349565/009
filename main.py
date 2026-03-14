@@ -333,6 +333,17 @@ class ResearchAgentSystem:
 
             self._check_cancelled()
 
+            # ── 硬性终止：有效数据为 0，拒绝生成报告 ──
+            if len(cleaned_data) == 0:
+                raise RuntimeError(
+                    "搜索引擎未返回任何有效数据（0 条），无法生成报告。\n"
+                    "可能原因：\n"
+                    "  1. SearXNG 服务异常（返回 502 / 连接超时）\n"
+                    "  2. 所有 general/news 引擎均被反爬封锁\n"
+                    "  3. SEARXNG_BASE_URL 配置错误\n"
+                    "请检查搜索引擎状态后重试，或切换为 Tavily 搜索引擎。"
+                )
+
             # 步骤5: 生成报告
             print(f"\n[步骤5] 生成报告...")
             self.timer.start("步骤5-生成报告", f"基于 {len(cleaned_data)} 条数据生成报告")
@@ -480,6 +491,17 @@ class ResearchAgentSystem:
 
                 self._check_cancelled()
 
+                # ── 硬性终止：第一轮搜索后累计数据仍为 0，说明搜索引擎完全失效，拒绝生成报告 ──
+                if iteration == 1 and len(self.context['collected_data']) == 0:
+                    raise RuntimeError(
+                        "搜索引擎未返回任何有效数据（0 条），无法生成报告。\n"
+                        "可能原因：\n"
+                        "  1. SearXNG 服务异常（返回 502 / 连接超时）\n"
+                        "  2. 所有 general/news 引擎均被反爬封锁\n"
+                        "  3. SEARXNG_BASE_URL 配置错误\n"
+                        "请检查搜索引擎状态后重试，或切换为 Tavily 搜索引擎。"
+                    )
+
                 # 步骤5: 生成或更新报告
                 print(f"\n[步骤5] {'生成' if iteration == 1 else '更新'}报告...")
                 
@@ -541,7 +563,8 @@ class ResearchAgentSystem:
                 judgment = self.quality_judge.judge(
                     json.dumps(judge_context, ensure_ascii=False),
                     final_report,
-                    iteration
+                    iteration,
+                    data_count=len(self.context['collected_data'])
                 )
                 self.process_logger.log_quality_judgment(judgment, iteration)
                 
